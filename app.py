@@ -29,7 +29,7 @@ st.markdown(
 <style>
   .main-title {
     font-size: 3.2rem; font-weight: 900; text-align: center;
-    background: linear-gradient(135deg, #FF6B35, #F7931E);
+    background: linear-gradient(135deg, #A855F7, #7C3AED);
     -webkit-background-clip: text; -webkit-text-fill-color: transparent;
     margin-bottom: 0;
   }
@@ -371,7 +371,7 @@ def build_excel(
 
 # ── Interface ──────────────────────────────────────────────────────────────────
 
-st.markdown('<h1 class="main-title">🎯 PROC-BULLS</h1>', unsafe_allow_html=True)
+st.markdown('<h1 class="main-title" translate="no">🎯 PROC-BULLS</h1>', unsafe_allow_html=True)
 st.markdown(
     '<p class="subtitle">Ferramenta de PROCV Inteligente · Análise de Conversão de Tráfego · Aure Digital</p>',
     unsafe_allow_html=True,
