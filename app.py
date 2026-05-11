@@ -132,27 +132,101 @@ def detect_tag_col(df: pd.DataFrame) -> Optional[str]:
 
 # ── Carregamento de arquivo ────────────────────────────────────────────────────
 
-def load_file(uploaded) -> Optional[pd.DataFrame]:
+def get_excel_sheets(uploaded) -> list:
+    """Retorna lista de abas de um Excel. Lista vazia indica CSV."""
     name = uploaded.name.lower()
+    if not name.endswith((".xlsx", ".xls", ".xlsm")):
+        return []
+    try:
+        uploaded.seek(0)
+        return pd.ExcelFile(uploaded).sheet_names
+    except Exception:
+        return []
+
+
+def detect_header_row(df_raw: pd.DataFrame) -> int:
+    """
+    Varre as primeiras linhas e retorna o índice da linha que parece
+    ser o cabeçalho real (ignora títulos e linhas em branco acima).
+    """
+    n_cols = len(df_raw.columns)
+    min_filled = max(2, int(n_cols * 0.3))
+
+    for i in range(min(10, len(df_raw))):
+        row = df_raw.iloc[i]
+        non_null = [v for v in row if pd.notna(v) and str(v).strip() not in ("", "nan")]
+        if len(non_null) < min_filled:
+            continue
+        label_count = sum(
+            1 for v in non_null
+            if isinstance(v, str)
+            and not re.fullmatch(r"[\d\s\.\,\-\+\/\%]+", v.strip())
+        )
+        if label_count / len(non_null) >= 0.4:
+            return i
+    return 0
+
+
+def _load_single_sheet(xls, sheet_name: str) -> tuple[pd.DataFrame, int]:
+    df_raw = pd.read_excel(xls, sheet_name=sheet_name, header=None, dtype=str)
+    hrow = detect_header_row(df_raw)
+    df = pd.read_excel(xls, sheet_name=sheet_name, header=hrow, dtype=str)
+    df = df.dropna(how="all").reset_index(drop=True)
+    return df, hrow
+
+
+def _load_csv_smart(uploaded) -> tuple[pd.DataFrame, int]:
+    for enc in ("utf-8", "latin-1", "cp1252", "iso-8859-1"):
+        try:
+            uploaded.seek(0)
+            df_raw = pd.read_csv(uploaded, encoding=enc, header=None, dtype=str)
+            hrow = detect_header_row(df_raw)
+            uploaded.seek(0)
+            df = pd.read_csv(uploaded, encoding=enc, header=hrow, dtype=str)
+            df = df.dropna(how="all").reset_index(drop=True)
+            return df, hrow
+        except UnicodeDecodeError:
+            continue
+        except Exception:
+            break
+    return pd.DataFrame(), 0
+
+
+def load_file_multisheet(
+    uploaded, selected_sheets: list
+) -> tuple[Optional[pd.DataFrame], dict]:
+    """
+    Carrega uma ou mais abas. Retorna (df_combinado, {aba: linha_cabecalho}).
+    Para CSV, selected_sheets é ignorado.
+    """
+    name = uploaded.name.lower()
+    sheet_info: dict = {}
+    dfs = []
+
     try:
         if name.endswith(".csv"):
-            for enc in ("utf-8", "latin-1", "cp1252", "iso-8859-1"):
-                try:
-                    uploaded.seek(0)
-                    return pd.read_csv(uploaded, encoding=enc, dtype=str)
-                except (UnicodeDecodeError, Exception):
-                    continue
+            df, hrow = _load_csv_smart(uploaded)
+            if len(df) > 0:
+                sheet_info["CSV"] = hrow
+                dfs.append(df)
         elif name.endswith((".xlsx", ".xls", ".xlsm")):
             uploaded.seek(0)
-            # Tenta ler todas as abas e pega a primeira com dados
             xls = pd.ExcelFile(uploaded)
-            for sheet in xls.sheet_names:
-                df = pd.read_excel(xls, sheet_name=sheet, dtype=str)
+            for sheet in selected_sheets:
+                df, hrow = _load_single_sheet(xls, sheet)
                 if len(df) > 0:
-                    return df
+                    if len(selected_sheets) > 1:
+                        df.insert(0, "_Planilha", sheet)
+                    sheet_info[sheet] = hrow
+                    dfs.append(df)
     except Exception as e:
         st.error(f"Erro ao ler arquivo: {e}")
-    return None
+        return None, {}
+
+    if not dfs:
+        return None, {}
+
+    return pd.concat(dfs, ignore_index=True), sheet_info
 
 
 # ── Lógica principal do PROCV ──────────────────────────────────────────────────
@@ -393,11 +467,29 @@ with col_left:
     )
     df_sales_raw: Optional[pd.DataFrame] = None
     if sales_file:
-        df_sales_raw = load_file(sales_file)
-        if df_sales_raw is not None:
-            st.success(f"✅ {len(df_sales_raw):,} linhas · {len(df_sales_raw.columns)} colunas")
-            with st.expander("Prévia"):
-                st.dataframe(df_sales_raw.head(6), use_container_width=True)
+        sales_sheets = get_excel_sheets(sales_file)
+        selected_sales_sheets = sales_sheets
+
+        if len(sales_sheets) > 1:
+            st.caption(f"📂 {len(sales_sheets)} planilhas encontradas neste arquivo")
+            selected_sales_sheets = st.multiselect(
+                "Selecione as planilhas a usar:",
+                options=sales_sheets,
+                default=sales_sheets,
+                key="sales_sheets_select",
+            )
+            if not selected_sales_sheets:
+                st.warning("Selecione ao menos uma planilha.")
+
+        if selected_sales_sheets or not sales_sheets:
+            df_sales_raw, sales_info = load_file_multisheet(sales_file, selected_sales_sheets)
+            if df_sales_raw is not None:
+                for sheet, hrow in sales_info.items():
+                    if hrow > 0:
+                        st.info(f"📋 '{sheet}': cabeçalho detectado na linha {hrow + 1} — título(s) anteriores ignorados.")
+                st.success(f"✅ {len(df_sales_raw):,} linhas · {len(df_sales_raw.columns)} colunas")
+                with st.expander("Prévia"):
+                    st.dataframe(df_sales_raw.head(6), use_container_width=True)
 
 with col_right:
     st.markdown("#### 🗂️ Planilha do Kommo")
@@ -409,11 +501,29 @@ with col_right:
     )
     df_kommo_raw: Optional[pd.DataFrame] = None
     if kommo_file:
-        df_kommo_raw = load_file(kommo_file)
-        if df_kommo_raw is not None:
-            st.success(f"✅ {len(df_kommo_raw):,} linhas · {len(df_kommo_raw.columns)} colunas")
-            with st.expander("Prévia"):
-                st.dataframe(df_kommo_raw.head(6), use_container_width=True)
+        kommo_sheets = get_excel_sheets(kommo_file)
+        selected_kommo_sheets = kommo_sheets
+
+        if len(kommo_sheets) > 1:
+            st.caption(f"📂 {len(kommo_sheets)} planilhas encontradas neste arquivo")
+            selected_kommo_sheets = st.multiselect(
+                "Selecione as planilhas a usar:",
+                options=kommo_sheets,
+                default=kommo_sheets,
+                key="kommo_sheets_select",
+            )
+            if not selected_kommo_sheets:
+                st.warning("Selecione ao menos uma planilha.")
+
+        if selected_kommo_sheets or not kommo_sheets:
+            df_kommo_raw, kommo_info = load_file_multisheet(kommo_file, selected_kommo_sheets)
+            if df_kommo_raw is not None:
+                for sheet, hrow in kommo_info.items():
+                    if hrow > 0:
+                        st.info(f"📋 '{sheet}': cabeçalho detectado na linha {hrow + 1} — título(s) anteriores ignorados.")
+                st.success(f"✅ {len(df_kommo_raw):,} linhas · {len(df_kommo_raw.columns)} colunas")
+                with st.expander("Prévia"):
+                    st.dataframe(df_kommo_raw.head(6), use_container_width=True)
 
 st.divider()
 
