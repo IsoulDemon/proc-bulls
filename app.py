@@ -572,6 +572,105 @@ def run_disparo(
     return pd.DataFrame(result_rows) if result_rows else pd.DataFrame()
 
 
+# ── Análise de Duplicatas ──────────────────────────────────────────────────────
+
+def _is_id_col(col_data: pd.Series, col_name: str) -> bool:
+    """Detecta colunas de ID sequencial que não devem entrar no fingerprint."""
+    id_kws = ["id", "codigo", "código", "protocolo", "numero", "número",
+              "registro", "pedido", "ordem", "seq", "nro", "nº", "num",
+              "index", "índice", "indice", "linha", "row"]
+    if any(kw in col_name.lower() for kw in id_kws):
+        return True
+    non_null = col_data.dropna()
+    if len(non_null) < 4:
+        return False
+    if non_null.nunique() == len(non_null):
+        is_int = non_null.apply(
+            lambda v: str(v).strip().replace(".0", "").lstrip("0").isdigit()
+        ).sum()
+        if int(is_int) >= 0.8 * len(non_null):
+            return True
+    return False
+
+
+def analyze_duplicates(
+    df: pd.DataFrame,
+    phone_col: str,
+    date_col: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    Classifica registros com telefone repetido.
+    Adiciona coluna 'Situacao_Venda':
+      Única               → só uma venda para este número
+      Multi-compra        → mesmo número, datas diferentes (compras reais)
+      Multi-compra (mesmo dia) → mesmo número, mesma data, conteúdo diferente
+      Multi-compra (sem data)  → mesmo número, sem data, conteúdo diferente
+      DUPLICATA           → mesmo número + mesma data + conteúdo idêntico
+      DUPLICATA (sem data)→ mesmo número, sem data, conteúdo idêntico
+    """
+    result = df.copy()
+    phones = df[phone_col].apply(
+        lambda v: right8(clean_phone(str(v))) if pd.notna(v) else ""
+    )
+
+    situacao = pd.Series(["Única"] * len(df), index=df.index, dtype=str)
+
+    counts = phones.value_counts()
+    multi_phones = counts[counts > 1].index
+
+    id_cols = {col for col in df.columns if _is_id_col(df[col], col)}
+    skip_set = {phone_col} | id_cols
+    if date_col:
+        skip_set.add(date_col)
+    fp_cols = [c for c in df.columns if c not in skip_set]
+
+    def _fingerprint(row) -> str:
+        parts = []
+        for c in fp_cols:
+            v = row.get(c, "")
+            if pd.isna(v):
+                parts.append("")
+                continue
+            s = str(v).strip().lower()
+            try:
+                s = str(round(float(s.replace(",", ".").replace(" ", "")), 2))
+            except ValueError:
+                pass
+            parts.append(s)
+        return "|".join(parts)
+
+    for phone in multi_phones:
+        mask = phones == phone
+        group = df[mask]
+
+        if date_col and date_col in df.columns:
+            date_keys = group[date_col].apply(
+                lambda v: (parse_date(v).strftime("%Y-%m-%d") if parse_date(v) else "")
+            )
+            unique_dates = set(d for d in date_keys if d)
+        else:
+            date_keys = pd.Series([""] * len(group), index=group.index)
+            unique_dates = set()
+
+        if len(unique_dates) > 1:
+            situacao[mask] = "Multi-compra"
+        elif len(unique_dates) == 1:
+            fps = group.apply(_fingerprint, axis=1)
+            if fps.nunique() == 1:
+                situacao[mask] = "DUPLICATA"
+            else:
+                situacao[mask] = "Multi-compra (mesmo dia)"
+        else:
+            fps = group.apply(_fingerprint, axis=1)
+            if fps.nunique() == 1:
+                situacao[mask] = "DUPLICATA (sem data)"
+            else:
+                situacao[mask] = "Multi-compra (sem data)"
+
+    result.insert(0, "Situacao_Venda", situacao)
+    return result
+
+
 # ── Geração do Excel formatado ─────────────────────────────────────────────────
 
 def _col_width(df: pd.DataFrame, col: str) -> float:
@@ -634,6 +733,16 @@ def _write_sheet(
             elif col_name == "É_Tráfego" and value == "SIM":
                 cell.fill = PatternFill("solid", fgColor="2980B9")
                 cell.font = Font(color="FFFFFF", bold=True, size=10)
+            elif col_name == "Situacao_Venda":
+                if str(value).startswith("DUPLICATA"):
+                    cell.fill = PatternFill("solid", fgColor="C0392B")
+                    cell.font = Font(color="FFFFFF", bold=True, size=10)
+                elif "mesmo dia" in str(value) or "sem data" in str(value):
+                    cell.fill = PatternFill("solid", fgColor="E67E22")
+                    cell.font = Font(color="FFFFFF", bold=True, size=10)
+                elif str(value).startswith("Multi"):
+                    cell.fill = PatternFill("solid", fgColor="2471A3")
+                    cell.font = Font(color="FFFFFF", bold=True, size=10)
             elif col_name in highlight_set:
                 cell.fill = PatternFill("solid", fgColor="FFE5D9" if not zebra else "FFD5B8")
             elif zebra:
@@ -655,6 +764,7 @@ def build_excel(
     df_result: pd.DataFrame,
     df_full: pd.DataFrame,
     df_disparo_result: Optional[pd.DataFrame] = None,
+    df_dup_analysis: Optional[pd.DataFrame] = None,
 ) -> bytes:
     wb = Workbook()
 
@@ -683,8 +793,23 @@ def build_excel(
     _write_sheet(ws4, df_full,
                  "KOMMO COMPLETO — TODAS AS LINHAS (USE O FILTRO)", "6C3483")
 
-    # Sheet 5 — Resultado Disparo (opcional)
+    # Sheet 5 — Duplicatas (opcional)
     all_sheets = [ws1, ws2, ws3, ws4]
+    if df_dup_analysis is not None and "Situacao_Venda" in df_dup_analysis.columns:
+        df_non_unique = df_dup_analysis[df_dup_analysis["Situacao_Venda"] != "Única"]
+        if len(df_non_unique) > 0:
+            ws_dup = wb.create_sheet("Duplicatas e Multi-compras")
+            n_dup = int((df_dup_analysis["Situacao_Venda"].str.startswith("DUPLICATA")).sum())
+            n_multi = int((df_dup_analysis["Situacao_Venda"].str.startswith("Multi")).sum())
+            _write_sheet(
+                ws_dup, df_non_unique,
+                f"DUPLICATAS ({n_dup}) E MULTI-COMPRAS ({n_multi}) — ANÁLISE DETALHADA",
+                "922B21",
+                ["Situacao_Venda"],
+            )
+            all_sheets.append(ws_dup)
+
+    # Sheet 6 — Resultado Disparo (opcional)
     if df_disparo_result is not None and len(df_disparo_result) > 0:
         ws_disp = wb.create_sheet("Resultado Disparo")
         disp_confirmed = int((df_disparo_result["Venda_Confirmada"] == "SIM").sum())
@@ -727,6 +852,14 @@ def build_excel(
             ("Total de disparos analisados", disp_total),
             ("Conversões confirmadas (disparo → venda)", disp_conv),
             ("Taxa de conversão do disparo", disp_rate),
+        ]
+    if df_dup_analysis is not None and "Situacao_Venda" in df_dup_analysis.columns:
+        n_dup = int((df_dup_analysis["Situacao_Venda"].str.startswith("DUPLICATA")).sum())
+        n_multi = int((df_dup_analysis["Situacao_Venda"].str.startswith("Multi")).sum())
+        summary_rows += [
+            ("— DUPLICATAS —", ""),
+            ("Registros duplicados suspeitos", n_dup),
+            ("Multi-compras (mesma pessoa)", n_multi),
         ]
 
     for i, (label, val) in enumerate(summary_rows, 2):
@@ -947,7 +1080,7 @@ if df_sales_raw is not None and df_kommo_raw is not None:
 
             confirmed = len(df_result)
 
-            progress.progress(70, text="Analisando disparo...")
+            progress.progress(60, text="Analisando disparo...")
             df_disparo_result = None
             if considerar_disparo and disparo_keyword.strip():
                 df_disparo_result = run_disparo(
@@ -956,8 +1089,11 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                     disparo_keyword, kommo_date_col,
                 )
 
+            progress.progress(80, text="Analisando duplicatas e multi-compras...")
+            df_dup_analysis = analyze_duplicates(df_sales_raw, sales_phone_col, sales_date_col)
+
             progress.progress(90, text="Gerando relatório Excel...")
-            excel_bytes = build_excel(ds_t, dk_t, df_result, df_full, df_disparo_result)
+            excel_bytes = build_excel(ds_t, dk_t, df_result, df_full, df_disparo_result, df_dup_analysis)
 
             progress.progress(100, text="Concluído!")
             progress.empty()
@@ -1013,6 +1149,49 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                         df_disparo_result[df_disparo_result["Venda_Confirmada"] == "SIM"],
                         use_container_width=True, height=250,
                     )
+
+            # ── Análise de Duplicatas ───────────────────────────────────────────
+            st.divider()
+            st.markdown('<div class="step-wrap"><div class="step-num">🔍</div><div class="step-text">Duplicatas e Multi-compras</div></div>', unsafe_allow_html=True)
+
+            sit = df_dup_analysis["Situacao_Venda"]
+            n_unica   = int((sit == "Única").sum())
+            n_multi   = int(sit.str.startswith("Multi").sum())
+            n_dup     = int(sit.str.startswith("DUPLICATA").sum())
+            n_numeros = df_dup_analysis[sales_phone_col].apply(
+                lambda v: right8(clean_phone(str(v))) if pd.notna(v) else ""
+            ).replace("", pd.NA).dropna().nunique()
+
+            da1, da2, da3, da4 = st.columns(4)
+            da1.metric("Números únicos", f"{n_numeros:,}")
+            da2.metric("Vendas únicas", f"{n_unica:,}")
+            da3.metric("Multi-compras", f"{n_multi:,}")
+            da4.metric("Duplicatas suspeitas", f"{n_dup:,}")
+
+            if n_dup > 0:
+                st.error(
+                    f"⚠️ **{n_dup} registros duplicados** detectados — mesmo número, mesma data e conteúdo idêntico. "
+                    f"Provavelmente lançamentos duplicados no sistema. Confira na aba **Duplicatas e Multi-compras** do Excel."
+                )
+                with st.expander(f"Ver os {n_dup} registros duplicados"):
+                    st.dataframe(
+                        df_dup_analysis[sit.str.startswith("DUPLICATA")],
+                        use_container_width=True, height=220,
+                    )
+
+            if n_multi > 0:
+                st.info(
+                    f"🔁 **{n_multi} multi-compras** identificadas — mesmo número com registros distintos "
+                    f"(datas ou valores diferentes), indicando compras reais de um cliente recorrente."
+                )
+                with st.expander(f"Ver as {n_multi} multi-compras"):
+                    st.dataframe(
+                        df_dup_analysis[sit.str.startswith("Multi")],
+                        use_container_width=True, height=220,
+                    )
+
+            if n_dup == 0 and n_multi == 0:
+                st.success("Nenhum número de telefone duplicado encontrado nas vendas.")
 
             # ── Download ───────────────────────────────────────────────────────
             st.divider()
