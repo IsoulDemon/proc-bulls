@@ -165,6 +165,26 @@ def detect_tag_col(df: pd.DataFrame) -> Optional[str]:
 
 # ── Carregamento de arquivo ────────────────────────────────────────────────────
 
+class _FileLike:
+    """Wrapper de bytes para simular um arquivo uploadado (necessário para cache)."""
+    def __init__(self, data: bytes, name: str):
+        self._buf = io.BytesIO(data)
+        self.name = name
+    def read(self, *a): return self._buf.read(*a)
+    def seek(self, *a): return self._buf.seek(*a)
+
+
+@st.cache_data(show_spinner=False)
+def _load_cached(file_bytes: bytes, file_name: str, sheets: tuple):
+    """Versão cacheada do load_file_multisheet — evita re-parsear no mesmo arquivo."""
+    return load_file_multisheet(_FileLike(file_bytes, file_name), list(sheets))
+
+
+@st.cache_data(show_spinner=False)
+def _get_sheets_cached(file_bytes: bytes, file_name: str) -> list:
+    return get_excel_sheets(_FileLike(file_bytes, file_name))
+
+
 def get_excel_sheets(uploaded) -> list:
     """Retorna lista de abas de um Excel. Lista vazia indica CSV."""
     name = uploaded.name.lower()
@@ -314,24 +334,29 @@ def run_procv(
     dk.insert(pos_k + 1, "Tel_8dig_Kommo", dk["Tel_Limpo_Kommo"].apply(right8))
 
     extended_lookup = _build_extended_lookup(df_sales, ds)
+    lookup_keys = set(extended_lookup.keys())
+
+    # Pré-computa right8 de cada coluna do Kommo (vetorizado) e monta sets por linha
+    kommo_row_keys: List[set] = [set() for _ in range(len(dk))]
+    for col in df_kommo.columns:
+        r8_col = dk[col].fillna("").astype(str).apply(
+            lambda v: right8(clean_phone(v)) if v else ""
+        )
+        for i, k in enumerate(r8_col):
+            if k:
+                kommo_row_keys[i].add(k)
 
     result_rows = []
-    for _, kr in dk.iterrows():
+    for i, (_, kr) in enumerate(dk.iterrows()):
         k8_primary = kr.get("Tel_8dig_Kommo", "")
         tag_raw = "" if pd.isna(kr.get(kommo_tag_col, np.nan)) else str(kr[kommo_tag_col])
         is_traffic = traffic_keyword.lower() in tag_raw.lower()
 
         sales_match = extended_lookup.get(k8_primary)
         if not sales_match:
-            for col in df_kommo.columns:
-                v = kr.get(col, "")
-                if pd.isna(v):
-                    continue
-                cleaned = clean_phone(str(v))
-                if len(cleaned) >= 8:
-                    sales_match = extended_lookup.get(right8(cleaned))
-                    if sales_match:
-                        break
+            matched_key = next(iter(kommo_row_keys[i] & lookup_keys), None)
+            if matched_key:
+                sales_match = extended_lookup.get(matched_key)
 
         row_out = {
             "Tag_Kommo": tag_raw,
@@ -972,7 +997,9 @@ with col_left:
                 st.warning("Selecione ao menos uma planilha.")
 
         if selected_sales_sheets or not sales_sheets:
-            df_sales_raw, sales_info = load_file_multisheet(sales_file, selected_sales_sheets)
+            df_sales_raw, sales_info = _load_cached(
+                sales_file.read(), sales_file.name, tuple(selected_sales_sheets or ["__csv__"])
+            )
             if df_sales_raw is not None:
                 for sheet, hrow in sales_info.items():
                     if hrow > 0:
@@ -1006,7 +1033,9 @@ with col_right:
                 st.warning("Selecione ao menos uma planilha.")
 
         if selected_kommo_sheets or not kommo_sheets:
-            df_kommo_raw, kommo_info = load_file_multisheet(kommo_file, selected_kommo_sheets)
+            df_kommo_raw, kommo_info = _load_cached(
+                kommo_file.read(), kommo_file.name, tuple(selected_kommo_sheets or ["__csv__"])
+            )
             if df_kommo_raw is not None:
                 for sheet, hrow in kommo_info.items():
                     if hrow > 0:
@@ -1032,7 +1061,9 @@ if kommo_disparo_file:
             options=kd_sheets, default=kd_sheets, key="kommo_disp_sheets",
         )
     if selected_kd_sheets or not kd_sheets:
-        df_kommo_disparo_raw, kd_info = load_file_multisheet(kommo_disparo_file, selected_kd_sheets)
+        df_kommo_disparo_raw, kd_info = _load_cached(
+            kommo_disparo_file.read(), kommo_disparo_file.name, tuple(selected_kd_sheets or ["__csv__"])
+        )
         if df_kommo_disparo_raw is not None:
             st.success(f"✅ Kommo Disparo: {len(df_kommo_disparo_raw):,} linhas · {len(df_kommo_disparo_raw.columns)} colunas")
             with st.expander("Prévia"):
@@ -1198,6 +1229,7 @@ if df_sales_raw is not None and df_kommo_raw is not None:
 
             progress.progress(90, text="Gerando relatório Excel...")
             excel_bytes = build_excel(ds_t, dk_t, df_result, df_full, df_disparo_result, df_dup_analysis)
+            st.session_state["excel_bytes"] = excel_bytes
 
             progress.progress(100, text="Concluído!")
             progress.empty()
@@ -1307,24 +1339,27 @@ if df_sales_raw is not None and df_kommo_raw is not None:
             if n_dup == 0 and n_multi == 0:
                 st.success("Nenhum número de telefone duplicado encontrado nas vendas.")
 
-            # ── Download ───────────────────────────────────────────────────────
             st.divider()
-            st.download_button(
-                label="📥  Baixar Excel — Resultado Completo",
-                data=excel_bytes,
-                file_name="proc_bulls_resultado.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-            )
-            st.caption(
-                "💡 Para usar no Google Sheets: faça upload do .xlsx no Google Drive → "
-                "clique com botão direito → Abrir com → Planilhas Google."
-            )
 
         except Exception:
             progress.empty()
             st.error("Erro ao processar. Detalhes abaixo:")
             st.code(traceback.format_exc())
+
+    # ── Download — fora do bloco de processamento para persistir entre reruns ──
+    if "excel_bytes" in st.session_state:
+        st.divider()
+        st.download_button(
+            label="📥  Baixar Excel — Resultado Completo",
+            data=st.session_state["excel_bytes"],
+            file_name="proc_bulls_resultado.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+        st.caption(
+            "💡 Para usar no Google Sheets: faça upload do .xlsx no Google Drive → "
+            "clique com botão direito → Abrir com → Planilhas Google."
+        )
 
 else:
     st.info("⬆️ Carregue as duas planilhas acima para continuar.")
