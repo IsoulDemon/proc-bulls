@@ -124,10 +124,23 @@ def detect_phone_col(df: pd.DataFrame) -> Optional[str]:
         "mobile", "cel", "numero", "número", "tel", "contato",
         "phone_number", "nr_tel", "nro", "n_tel",
     ]
-    for col in df.columns:
-        if _match_keywords(col, kws):
-            return col
-    # Detecção por conteúdo
+
+    def _phone_score(col: str) -> int:
+        sample = df[col].dropna().astype(str).head(30)
+        if len(sample) == 0:
+            return 0
+        return int(sample.apply(
+            lambda x: bool(re.search(r"\d{7,}", re.sub(r"[\s\-\(\)\.+]", "", x)))
+        ).sum())
+
+    # Encontra todas as colunas que batem por keyword e escolhe a com mais telefones reais
+    candidates = [col for col in df.columns if _match_keywords(col, kws)]
+    if candidates:
+        best = max(candidates, key=_phone_score)
+        if _phone_score(best) >= 2:
+            return best
+
+    # Fallback: detecção só por conteúdo
     for col in df.columns:
         sample = df[col].dropna().astype(str).head(20)
         hits = sample.apply(
