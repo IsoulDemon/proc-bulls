@@ -251,8 +251,7 @@ def get_excel_sheets(uploaded) -> list:
     if not name.endswith((".xlsx", ".xls", ".xlsm")):
         return []
     try:
-        uploaded.seek(0)
-        return pd.ExcelFile(uploaded).sheet_names
+        return _open_excel_file(uploaded).sheet_names
     except Exception:
         return []
 
@@ -286,6 +285,19 @@ def _load_single_sheet(xls, sheet_name: str) -> tuple[pd.DataFrame, int]:
     df = pd.read_excel(xls, sheet_name=sheet_name, header=hrow, dtype=str)
     df = df.dropna(how="all").reset_index(drop=True)
     return df, hrow
+
+
+def _open_excel_file(uploaded):
+    """Tenta abrir um ExcelFile com múltiplos engines (openpyxl, xlrd)."""
+    for engine in (None, "openpyxl", "xlrd"):
+        try:
+            uploaded.seek(0)
+            if engine:
+                return pd.ExcelFile(uploaded, engine=engine)
+            return pd.ExcelFile(uploaded)
+        except Exception:
+            continue
+    raise ValueError("Não foi possível abrir o arquivo Excel. Verifique se o arquivo não está corrompido.")
 
 
 def _load_csv_smart(uploaded) -> tuple[pd.DataFrame, int]:
@@ -323,8 +335,7 @@ def load_file_multisheet(
                 sheet_info["CSV"] = hrow
                 dfs.append(df)
         elif name.endswith((".xlsx", ".xls", ".xlsm")):
-            uploaded.seek(0)
-            xls = pd.ExcelFile(uploaded)
+            xls = _open_excel_file(uploaded)
             for sheet in selected_sheets:
                 df, hrow = _load_single_sheet(xls, sheet)
                 if len(df) > 0:
@@ -1096,7 +1107,8 @@ with col_left:
     )
     df_sales_raw: Optional[pd.DataFrame] = None
     if sales_file:
-        sales_sheets = get_excel_sheets(sales_file)
+        sales_bytes = sales_file.read()  # lê UMA vez aqui
+        sales_sheets = _get_sheets_cached(sales_bytes, sales_file.name)
         selected_sales_sheets = sales_sheets
 
         if len(sales_sheets) > 1:
@@ -1112,7 +1124,7 @@ with col_left:
 
         if selected_sales_sheets or not sales_sheets:
             df_sales_raw, sales_info = _load_cached(
-                sales_file.read(), sales_file.name, tuple(selected_sales_sheets or ["__csv__"])
+                sales_bytes, sales_file.name, tuple(selected_sales_sheets or ["__csv__"])
             )
             if df_sales_raw is not None:
                 for sheet, hrow in sales_info.items():
@@ -1132,7 +1144,8 @@ with col_right:
     )
     df_kommo_raw: Optional[pd.DataFrame] = None
     if kommo_file:
-        kommo_sheets = get_excel_sheets(kommo_file)
+        kommo_bytes = kommo_file.read()  # lê UMA vez aqui
+        kommo_sheets = _get_sheets_cached(kommo_bytes, kommo_file.name)
         selected_kommo_sheets = kommo_sheets
 
         if len(kommo_sheets) > 1:
@@ -1148,7 +1161,7 @@ with col_right:
 
         if selected_kommo_sheets or not kommo_sheets:
             df_kommo_raw, kommo_info = _load_cached(
-                kommo_file.read(), kommo_file.name, tuple(selected_kommo_sheets or ["__csv__"])
+                kommo_bytes, kommo_file.name, tuple(selected_kommo_sheets or ["__csv__"])
             )
             if df_kommo_raw is not None:
                 for sheet, hrow in kommo_info.items():
@@ -1167,7 +1180,8 @@ kommo_disparo_file = st.file_uploader(
 )
 df_kommo_disparo_raw: Optional[pd.DataFrame] = None
 if kommo_disparo_file:
-    kd_sheets = get_excel_sheets(kommo_disparo_file)
+    kd_bytes = kommo_disparo_file.read()  # lê UMA vez aqui
+    kd_sheets = _get_sheets_cached(kd_bytes, kommo_disparo_file.name)
     selected_kd_sheets = kd_sheets
     if len(kd_sheets) > 1:
         selected_kd_sheets = st.multiselect(
@@ -1176,7 +1190,7 @@ if kommo_disparo_file:
         )
     if selected_kd_sheets or not kd_sheets:
         df_kommo_disparo_raw, kd_info = _load_cached(
-            kommo_disparo_file.read(), kommo_disparo_file.name, tuple(selected_kd_sheets or ["__csv__"])
+            kd_bytes, kommo_disparo_file.name, tuple(selected_kd_sheets or ["__csv__"])
         )
         if df_kommo_disparo_raw is not None:
             st.success(f"✅ Kommo Disparo: {len(df_kommo_disparo_raw):,} linhas · {len(df_kommo_disparo_raw.columns)} colunas")
