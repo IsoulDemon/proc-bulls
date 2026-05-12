@@ -1704,28 +1704,11 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                     lambda t: "Tráfego + Disparo" if t in overlap_phones else "Disparo"
                 )
 
-            progress.progress(80, text="Analisando duplicatas e multi-compras...")
-            df_dup_analysis = analyze_duplicates(df_sales_raw, sales_phone_col, sales_date_col)
-
-            progress.progress(90, text="Gerando relatório Excel...")
-            # Receita para o Excel: tráfego puro + overlap (não somamos disparo separado pra evitar dupla contagem)
-            _tv_excel = (rev_t or 0) + (rev_o or 0) if rev_total else None
-            _dv_excel = rev_d if rev_d else None
-
-            excel_bytes = build_excel(ds_t, dk_t, df_result, df_full, df_disparo_result, df_dup_analysis,
-                                       traffic_revenue=_tv_excel, disparo_revenue=_dv_excel)
-            st.session_state["excel_bytes"] = excel_bytes
-
-            progress.progress(100, text="Concluído!")
-            progress.empty()
-
-            # ── Receita sem dupla contagem — busca direto no arquivo de vendas ──
-            # (evita o problema de aba sem coluna de valor)
+            # ── Receita sem dupla contagem (calculado antes do Excel) ───────────
             def _revenue_breakdown(t_phones, d_phones, ov_phones):
                 """Retorna (r_trafego_puro, r_disparo_puro, r_overlap, r_total)"""
                 if not sales_value_col:
                     return None, None, None, None
-                # Mapeia telefone → valor da venda a partir dos dados originais
                 pv: dict = {}
                 for _, row in df_sales_raw.iterrows():
                     ph = right8(clean_phone(str(row.get(sales_phone_col, ""))))
@@ -1745,6 +1728,20 @@ if df_sales_raw is not None and df_kommo_raw is not None:
             rev_t, rev_d, rev_o, rev_total = _revenue_breakdown(
                 trafego_phones, disparo_phones, overlap_phones
             )
+
+            progress.progress(80, text="Analisando duplicatas e multi-compras...")
+            df_dup_analysis = analyze_duplicates(df_sales_raw, sales_phone_col, sales_date_col)
+
+            progress.progress(90, text="Gerando relatório Excel...")
+            _tv_excel = (rev_t or 0) + (rev_o or 0) if rev_total else None
+            _dv_excel = rev_d if rev_d else None
+
+            excel_bytes = build_excel(ds_t, dk_t, df_result, df_full, df_disparo_result, df_dup_analysis,
+                                       traffic_revenue=_tv_excel, disparo_revenue=_dv_excel)
+            st.session_state["excel_bytes"] = excel_bytes
+
+            progress.progress(100, text="Concluído!")
+            progress.empty()
 
             # ── Métricas ───────────────────────────────────────────────────────
             st.markdown('<div class="step-wrap"><div class="step-num">✓</div><div class="step-text">Resultados — Tráfego</div></div>', unsafe_allow_html=True)
