@@ -89,6 +89,10 @@ def clean_phone(raw) -> str:
     if raw.lower() in ("", "nan", "none", "-", "n/a", "#n/a"):
         return ""
 
+    # Trata "66999873776.0" — número do Excel lido como float string
+    if re.match(r"^\d+\.0+$", raw):
+        raw = str(int(float(raw)))
+
     # Mantém só dígitos e +
     digits = re.sub(r"[^\d+]", "", raw).lstrip("+")
 
@@ -261,11 +265,11 @@ def load_file_multisheet(
 # ── Lógica principal do PROCV ──────────────────────────────────────────────────
 
 def _is_phone_col(col_data: pd.Series) -> bool:
-    """Retorna True se >= 30% dos valores não-nulos têm 8+ dígitos após limpeza."""
+    """Retorna True se a coluna tem pelo menos 2 valores com 8+ dígitos após limpeza."""
     if len(col_data) == 0:
         return False
-    phone_like = col_data.apply(lambda v: len(clean_phone(str(v))) >= 8).sum()
-    return int(phone_like) >= max(2, len(col_data) * 0.3)
+    phone_like = int(col_data.apply(lambda v: len(clean_phone(str(v))) >= 8).sum())
+    return phone_like >= 2
 
 
 def _build_extended_lookup(df: pd.DataFrame, ds_with_meta: pd.DataFrame) -> dict:
