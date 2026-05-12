@@ -260,6 +260,33 @@ def load_file_multisheet(
 
 # ── Lógica principal do PROCV ──────────────────────────────────────────────────
 
+def _is_phone_col(col_data: pd.Series) -> bool:
+    """Retorna True se >= 30% dos valores não-nulos têm 8+ dígitos após limpeza."""
+    if len(col_data) == 0:
+        return False
+    phone_like = col_data.apply(lambda v: len(clean_phone(str(v))) >= 8).sum()
+    return int(phone_like) >= max(2, len(col_data) * 0.3)
+
+
+def _build_extended_lookup(df: pd.DataFrame, ds_with_meta: pd.DataFrame) -> dict:
+    """
+    Constrói {right8_key: row_dict} varrendo TODAS as colunas de telefone de df.
+    Usa ds_with_meta (que já tem colunas extras) como fonte dos dicts de linha.
+    """
+    lookup: dict = {}
+    for col in df.columns:
+        col_data = df[col].dropna()
+        if not _is_phone_col(col_data):
+            continue
+        for idx in col_data.index:
+            cleaned = clean_phone(str(df.at[idx, col]))
+            if len(cleaned) >= 8:
+                key = right8(cleaned)
+                if key and key not in lookup:
+                    lookup[key] = ds_with_meta.loc[idx].to_dict()
+    return lookup
+
+
 def run_procv(
     df_sales: pd.DataFrame,
     sales_phone_col: str,
@@ -270,39 +297,42 @@ def run_procv(
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Retorna: (vendas_tratada, kommo_tratada, resultado_trafego, resultado_completo)
+    Varre todas as colunas de telefone para maximizar matches.
     """
-
-    # ── Trata planilha de vendas ──────────────────────────────────────────────
     ds = df_sales.copy()
     pos = ds.columns.get_loc(sales_phone_col) + 1
     ds.insert(pos, "Tel_Limpo_Vendas", ds[sales_phone_col].apply(clean_phone))
     ds.insert(pos + 1, "Tel_8dig_Vendas", ds["Tel_Limpo_Vendas"].apply(right8))
 
-    # ── Trata planilha do Kommo ───────────────────────────────────────────────
     dk = df_kommo.copy()
     pos_k = dk.columns.get_loc(kommo_phone_col) + 1
     dk.insert(pos_k, "Tel_Limpo_Kommo", dk[kommo_phone_col].apply(clean_phone))
     dk.insert(pos_k + 1, "Tel_8dig_Kommo", dk["Tel_Limpo_Kommo"].apply(right8))
 
-    # ── Monta dicionário de lookup: 8dig → linha de vendas ───────────────────
-    lookup: dict[str, dict] = {}
-    for _, row in ds.iterrows():
-        key = row["Tel_8dig_Vendas"]
-        if key and key not in lookup:
-            lookup[key] = row.to_dict()
+    extended_lookup = _build_extended_lookup(df_sales, ds)
 
-    # ── PROCV: cruza Kommo × Vendas ───────────────────────────────────────────
     result_rows = []
     for _, kr in dk.iterrows():
-        k8 = kr["Tel_8dig_Kommo"]
+        k8_primary = kr.get("Tel_8dig_Kommo", "")
         tag_raw = "" if pd.isna(kr.get(kommo_tag_col, np.nan)) else str(kr[kommo_tag_col])
         is_traffic = traffic_keyword.lower() in tag_raw.lower()
-        sales_match = lookup.get(k8)
+
+        sales_match = extended_lookup.get(k8_primary)
+        if not sales_match:
+            for col in df_kommo.columns:
+                v = kr.get(col, "")
+                if pd.isna(v):
+                    continue
+                cleaned = clean_phone(str(v))
+                if len(cleaned) >= 8:
+                    sales_match = extended_lookup.get(right8(cleaned))
+                    if sales_match:
+                        break
 
         row_out = {
             "Tag_Kommo": tag_raw,
             "Telefone_Kommo": kr.get(kommo_phone_col, ""),
-            "Tel_8dig": k8,
+            "Tel_8dig": k8_primary,
             "É_Tráfego": "SIM" if is_traffic else "NÃO",
             "Venda_Confirmada": "SIM" if sales_match else "NÃO",
         }
@@ -317,120 +347,6 @@ def run_procv(
     ].copy()
 
     return ds, dk, df_trafego, df_full
-
-
-# ── Busca automática de melhor combinação de colunas ──────────────────────────
-
-def find_best_column_combo(
-    df_sales: pd.DataFrame,
-    df_kommo: pd.DataFrame,
-    traffic_keyword: str,
-) -> Optional[tuple[str, str, str, int]]:
-    """
-    Testa todas as combinações (col_tel_vendas × col_tel_kommo × col_tag_kommo)
-    e retorna a que gera mais conversões de tráfego, ou None se nenhuma encontrar.
-    """
-    # Pré-computa chaves 8-dig para cada coluna de vendas
-    sales_sets: dict = {}
-    for col in df_sales.columns:
-        cleaned = df_sales[col].apply(
-            lambda v: right8(clean_phone(str(v))) if pd.notna(v) else ""
-        )
-        valid = set(v for v in cleaned if v)
-        if len(valid) >= 2:
-            sales_sets[col] = valid
-
-    if not sales_sets:
-        return None
-
-    # Pré-computa chaves 8-dig para cada coluna do kommo
-    kommo_cleaned: dict = {}
-    for col in df_kommo.columns:
-        cleaned = df_kommo[col].apply(
-            lambda v: right8(clean_phone(str(v))) if pd.notna(v) else ""
-        )
-        if (cleaned != "").sum() >= 2:
-            kommo_cleaned[col] = cleaned
-
-    if not kommo_cleaned:
-        return None
-
-    best: tuple = (None, None, None, 0)
-
-    for t_col in df_kommo.columns:
-        traffic_mask = (
-            df_kommo[t_col].fillna("").astype(str)
-            .str.lower()
-            .str.contains(traffic_keyword.lower(), regex=False)
-        )
-        if traffic_mask.sum() == 0:
-            continue
-
-        for k_col, k_series in kommo_cleaned.items():
-            traffic_keys = set(k_series[traffic_mask])
-            traffic_keys.discard("")
-            if not traffic_keys:
-                continue
-
-            for s_col, s_set in sales_sets.items():
-                conv = len(traffic_keys & s_set)
-                if conv > best[3]:
-                    best = (s_col, k_col, t_col, conv)
-
-    return best if best[3] > 0 else None
-
-
-def find_best_disparo_combo(
-    df_sales: pd.DataFrame,
-    df_kommo: pd.DataFrame,
-    disparo_keyword: str,
-    kommo_tag_col: str,
-) -> Optional[tuple]:
-    """
-    Testa todas as combinações (sales_phone_col × kommo_phone_col) para leads de disparo.
-    Retorna (sales_phone_col, kommo_phone_col, n_conversoes) ou None.
-    """
-    disparo_mask = (
-        df_kommo[kommo_tag_col].fillna("").astype(str)
-        .str.lower()
-        .str.contains(disparo_keyword.lower(), regex=False)
-    )
-    df_disp = df_kommo[disparo_mask]
-    if len(df_disp) == 0:
-        return None
-
-    kommo_sets: dict = {}
-    for col in df_disp.columns:
-        cleaned = df_disp[col].apply(
-            lambda v: right8(clean_phone(str(v))) if pd.notna(v) else ""
-        )
-        valid = set(v for v in cleaned if v)
-        if len(valid) >= 2:
-            kommo_sets[col] = valid
-
-    if not kommo_sets:
-        return None
-
-    sales_sets: dict = {}
-    for col in df_sales.columns:
-        cleaned = df_sales[col].apply(
-            lambda v: right8(clean_phone(str(v))) if pd.notna(v) else ""
-        )
-        valid = set(v for v in cleaned if v)
-        if len(valid) >= 2:
-            sales_sets[col] = valid
-
-    if not sales_sets:
-        return None
-
-    best: tuple = (None, None, 0)
-    for k_col, k_keys in kommo_sets.items():
-        for s_col, s_set in sales_sets.items():
-            conv = len(k_keys & s_set)
-            if conv > best[2]:
-                best = (s_col, k_col, conv)
-
-    return best if best[2] > 0 else None
 
 
 # ── Utilitários de data ────────────────────────────────────────────────────────
@@ -555,7 +471,6 @@ def run_disparo(
     if len(df_disp_leads) == 0:
         return pd.DataFrame()
 
-    # Pré-processa vendas
     ds = df_sales.copy()
     ds["_tel8"] = ds[sales_phone_col].apply(
         lambda v: right8(clean_phone(str(v))) if pd.notna(v) else ""
@@ -563,44 +478,69 @@ def run_disparo(
     if sales_date_col:
         ds["_dt_venda"] = ds[sales_date_col].apply(parse_date)
 
+    # Lookup estendido: todas as colunas de telefone das vendas
+    added: set = set()
     sales_lookup: dict = {}
-    for _, row in ds.iterrows():
-        key = row["_tel8"]
-        if not key:
+    for col in df_sales.columns:
+        col_data = df_sales[col].dropna()
+        if not _is_phone_col(col_data):
             continue
-        sales_lookup.setdefault(key, []).append(row.to_dict())
+        for idx in col_data.index:
+            cleaned = clean_phone(str(df_sales.at[idx, col]))
+            if len(cleaned) >= 8:
+                key = right8(cleaned)
+                if key and (key, idx) not in added:
+                    sales_lookup.setdefault(key, []).append(ds.loc[idx].to_dict())
+                    added.add((key, idx))
 
     result_rows = []
     for _, kr in df_disp_leads.iterrows():
         tel_raw = kr.get(kommo_phone_col, "")
-        tel8 = right8(clean_phone(str(tel_raw))) if pd.notna(tel_raw) else ""
-        if not tel8:
+        tel8_primary = right8(clean_phone(str(tel_raw))) if pd.notna(tel_raw) else ""
+
+        # Coleta todas as chaves right8 deste lead (todas as colunas)
+        all_tel8: list = []
+        if tel8_primary:
+            all_tel8.append(tel8_primary)
+        for col in df_kommo.columns:
+            v = kr.get(col, "")
+            if pd.isna(v):
+                continue
+            cleaned = clean_phone(str(v))
+            if len(cleaned) >= 8:
+                k8 = right8(cleaned)
+                if k8 and k8 not in all_tel8:
+                    all_tel8.append(k8)
+
+        if not all_tel8:
             continue
 
         disp_date = parse_date(kr.get(kommo_date_col)) if kommo_date_col else None
-        candidates = sales_lookup.get(tel8, [])
 
         matched_sale = None
-        for sale in candidates:
-            if disp_date and sales_date_col:
-                sale_dt = sale.get("_dt_venda")
-                if sale_dt:
-                    delta = (sale_dt - disp_date).days
-                    if 0 <= delta <= window_days:
+        for tel8 in all_tel8:
+            for sale in sales_lookup.get(tel8, []):
+                if disp_date and sales_date_col:
+                    sale_dt = sale.get("_dt_venda")
+                    if sale_dt:
+                        delta = (sale_dt - disp_date).days
+                        if 0 <= delta <= window_days:
+                            matched_sale = sale
+                            break
+                    else:
                         matched_sale = sale
                         break
                 else:
                     matched_sale = sale
                     break
-            else:
-                matched_sale = sale
+            if matched_sale:
                 break
 
         tag_raw = str(kr.get(kommo_tag_col, ""))
         row_out: dict = {
             "Tag_Kommo": tag_raw,
             "Telefone_Disparo": tel_raw,
-            "Tel_8dig": tel8,
+            "Tel_8dig": tel8_primary,
         }
 
         if kommo_date_col:
@@ -998,7 +938,7 @@ if df_sales_raw is not None and df_kommo_raw is not None:
     if st.button("🎯  RODAR PROC-BULLS", use_container_width=True, type="primary"):
         progress = st.progress(0, text="Iniciando...")
         try:
-            progress.progress(10, text="Tratando planilha de vendas...")
+            progress.progress(10, text="Cruzando vendas com Kommo...")
             ds_t, dk_t, df_result, df_full = run_procv(
                 df_sales_raw, sales_phone_col,
                 df_kommo_raw, kommo_phone_col, kommo_tag_col,
@@ -1006,46 +946,15 @@ if df_sales_raw is not None and df_kommo_raw is not None:
             )
 
             confirmed = len(df_result)
-            auto_combo = None
-
-            if confirmed == 0:
-                progress.progress(40, text="Buscando combinações alternativas de colunas...")
-                auto_combo = find_best_column_combo(df_sales_raw, df_kommo_raw, traffic_keyword)
-                if auto_combo:
-                    progress.progress(55, text="Reprocessando com colunas otimizadas...")
-                    s_col, k_col, t_col, _ = auto_combo
-                    ds_t, dk_t, df_result, df_full = run_procv(
-                        df_sales_raw, s_col,
-                        df_kommo_raw, k_col, t_col,
-                        traffic_keyword,
-                    )
-                    confirmed = len(df_result)
 
             progress.progress(70, text="Analisando disparo...")
             df_disparo_result = None
-            disparo_auto_combo = None
             if considerar_disparo and disparo_keyword.strip():
                 df_disparo_result = run_disparo(
                     df_sales_raw, sales_phone_col, sales_date_col,
                     df_kommo_raw, kommo_phone_col, kommo_tag_col,
                     disparo_keyword, kommo_date_col,
                 )
-                disp_conv_initial = 0
-                if df_disparo_result is not None and len(df_disparo_result) > 0:
-                    disp_conv_initial = int((df_disparo_result["Venda_Confirmada"] == "SIM").sum())
-                if disp_conv_initial == 0:
-                    progress.progress(78, text="Testando combinações de colunas para disparo...")
-                    best_disp = find_best_disparo_combo(
-                        df_sales_raw, df_kommo_raw, disparo_keyword, kommo_tag_col
-                    )
-                    if best_disp:
-                        s_col_d, k_col_d, _ = best_disp
-                        disparo_auto_combo = best_disp
-                        df_disparo_result = run_disparo(
-                            df_sales_raw, s_col_d, sales_date_col,
-                            df_kommo_raw, k_col_d, kommo_tag_col,
-                            disparo_keyword, kommo_date_col,
-                        )
 
             progress.progress(90, text="Gerando relatório Excel...")
             excel_bytes = build_excel(ds_t, dk_t, df_result, df_full, df_disparo_result)
@@ -1069,23 +978,11 @@ if df_sales_raw is not None and df_kommo_raw is not None:
 
             st.divider()
 
-            if auto_combo:
-                s_col, k_col, t_col, n = auto_combo
-                st.info(
-                    f"💡 Colunas originais não geraram matches. "
-                    f"A ferramenta encontrou **{confirmed}** conversão(ões) usando:\n\n"
-                    f"- Telefone Vendas → **{s_col}**\n"
-                    f"- Telefone Kommo → **{k_col}**\n"
-                    f"- Tag Kommo → **{t_col}**"
-                )
-
             if confirmed > 0:
                 st.success(f"🎉 {confirmed} leads de tráfego com venda confirmada!")
                 st.dataframe(df_result, use_container_width=True, height=280)
-            elif auto_combo is None:
-                st.warning(
-                    "Nenhuma conversão de tráfego encontrada mesmo após testar todas as combinações de colunas."
-                )
+            else:
+                st.warning("Nenhuma conversão de tráfego encontrada.")
 
             # ── Resultado Disparo ───────────────────────────────────────────────
             st.divider()
@@ -1096,14 +993,6 @@ if df_sales_raw is not None and df_kommo_raw is not None:
             elif df_disparo_result is None or len(df_disparo_result) == 0:
                 st.warning(f"Nenhum lead encontrado com a tag **\"{disparo_keyword}\"** no Kommo. Verifique a palavra-chave ou a coluna de tags selecionada.")
             else:
-                if disparo_auto_combo:
-                    s_col_d, k_col_d, n_d = disparo_auto_combo
-                    st.info(
-                        f"💡 Colunas originais não geraram matches para disparo. "
-                        f"A ferramenta encontrou **{n_d}** lead(s) usando:\n\n"
-                        f"- Telefone Vendas → **{s_col_d}**\n"
-                        f"- Telefone Kommo → **{k_col_d}**"
-                    )
                 disp_conv = int((df_disparo_result["Venda_Confirmada"] == "SIM").sum())
                 disp_total = len(df_disparo_result)
                 disp_rate = f"{disp_conv/disp_total*100:.1f}%" if disp_total > 0 else "—"
