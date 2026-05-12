@@ -123,13 +123,19 @@ def _match_keywords(col_name: str, keywords: list[str]) -> bool:
 
 
 def detect_phone_col(df: pd.DataFrame) -> Optional[str]:
+    """
+    Detecta coluna de telefone por conteúdo (7+ dígitos) + bônus por nome.
+    Funciona com colunas sem nome óbvio — cada planilha é um caso.
+    """
     kws = [
         "telefone", "celular", "whatsapp", "wpp", "fone", "phone",
         "mobile", "cel", "numero", "número", "tel", "contato",
         "phone_number", "nr_tel", "nro", "n_tel",
     ]
+    skip_kws = ["data", "date", "valor", "preco", "preço", "total",
+                "cpf", "cnpj", "cep", "id", "código", "codigo"]
 
-    def _phone_score(col: str) -> int:
+    def _phone_hits(col: str) -> int:
         sample = df[col].dropna().astype(str).head(30)
         if len(sample) == 0:
             return 0
@@ -137,22 +143,21 @@ def detect_phone_col(df: pd.DataFrame) -> Optional[str]:
             lambda x: bool(re.search(r"\d{7,}", re.sub(r"[\s\-\(\)\.+]", "", x)))
         ).sum())
 
-    # Encontra todas as colunas que batem por keyword e escolhe a com mais telefones reais
-    candidates = [col for col in df.columns if _match_keywords(col, kws)]
-    if candidates:
-        best = max(candidates, key=_phone_score)
-        if _phone_score(best) >= 2:
-            return best
-
-    # Fallback: detecção só por conteúdo
+    candidates = []
     for col in df.columns:
-        sample = df[col].dropna().astype(str).head(20)
-        hits = sample.apply(
-            lambda x: bool(re.search(r"\d{7,}", re.sub(r"[\s\-\(\)\.+]", "", x)))
-        )
-        if hits.sum() >= max(2, len(sample) * 0.4):
-            return col
-    return None
+        if _match_keywords(col, skip_kws):
+            continue
+        hits = _phone_hits(col)
+        if hits < 2:
+            continue
+        sample_size = max(1, len(df[col].dropna().head(30)))
+        content_score = int((hits / sample_size) * 60)
+        name_bonus = 40 if _match_keywords(col, kws) else 0
+        candidates.append((col, content_score + name_bonus))
+
+    if not candidates:
+        return None
+    return max(candidates, key=lambda x: x[1])[0]
 
 
 def detect_tag_col(df: pd.DataFrame) -> Optional[str]:
@@ -532,17 +537,40 @@ def parse_date(value) -> Optional[datetime]:
 
 
 def detect_date_col(df: pd.DataFrame) -> Optional[str]:
-    kws = ["data", "date", "dt", "dia", "quando", "periodo", "período",
-           "competencia", "competência", "venda_em", "criado", "created", "hora"]
+    """
+    Detecta coluna de data por conteúdo primeiro, nome como bônus.
+    Funciona com colunas chamadas "Data", "Dt", "Date", "Período", etc.
+    Cada planilha é um caso — não assume padronização.
+    """
+    kws = [
+        "data", "date", "dt", "dia", "quando", "periodo", "período",
+        "competencia", "competência", "venda_em", "criado", "created",
+        "hora", "timestamp", "tempo", "time", "mes", "mês", "ano",
+        "year", "month", "compra", "pedido", "emissao", "emissão",
+        "lancamento", "lançamento", "movimento", "referencia", "referência",
+    ]
+    # Colunas que provavelmente NÃO são datas (evita falsos positivos)
+    skip_kws = ["telefone", "celular", "phone", "tel", "whatsapp", "wpp",
+                "valor", "preco", "preço", "total", "cpf", "cnpj", "cep"]
+
+    candidates: list = []
     for col in df.columns:
-        if _match_keywords(col, kws):
-            return col
-    for col in df.columns:
-        sample = df[col].dropna().head(15)
+        if _match_keywords(col, skip_kws):
+            continue
+        sample = df[col].dropna().head(25)
+        if len(sample) == 0:
+            continue
         hits = sum(1 for v in sample if parse_date(v) is not None)
-        if hits >= max(2, len(sample) * 0.5):
-            return col
-    return None
+        if hits < 2:
+            continue
+        content_score = int((hits / len(sample)) * 60)  # 0-60
+        name_bonus = 40 if _match_keywords(col, kws) else 0
+        candidates.append((col, content_score + name_bonus))
+
+    if not candidates:
+        return None
+    # Retorna a coluna com maior pontuação combinada (conteúdo + nome)
+    return max(candidates, key=lambda x: x[1])[0]
 
 
 # ── Análise de Disparo ─────────────────────────────────────────────────────────
