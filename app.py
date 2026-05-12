@@ -1447,6 +1447,29 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                     disparo_keyword, kommo_date_col,
                 )
 
+            # ── Atribuição: sobreposição tráfego × disparo ────────────────────
+            trafego_phones: set = set()
+            if len(df_result) > 0 and "Tel_8dig" in df_result.columns:
+                trafego_phones = set(df_result["Tel_8dig"].dropna().values)
+
+            disparo_phones: set = set()
+            if df_disparo_result is not None and len(df_disparo_result) > 0:
+                disp_sim = df_disparo_result[df_disparo_result["Venda_Confirmada"] == "SIM"]
+                if "Tel_8dig" in disp_sim.columns:
+                    disparo_phones = set(disp_sim["Tel_8dig"].dropna().values)
+
+            overlap_phones = trafego_phones & disparo_phones
+
+            # Adiciona coluna "Origem" em cada resultado
+            if len(df_result) > 0:
+                df_result["Origem"] = df_result["Tel_8dig"].apply(
+                    lambda t: "Tráfego + Disparo" if t in overlap_phones else "Tráfego"
+                )
+            if df_disparo_result is not None and len(df_disparo_result) > 0:
+                df_disparo_result["Origem"] = df_disparo_result["Tel_8dig"].apply(
+                    lambda t: "Tráfego + Disparo" if t in overlap_phones else "Disparo"
+                )
+
             progress.progress(80, text="Analisando duplicatas e multi-compras...")
             df_dup_analysis = analyze_duplicates(df_sales_raw, sales_phone_col, sales_date_col)
 
@@ -1545,6 +1568,34 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                         df_disparo_result[df_disparo_result["Venda_Confirmada"] == "SIM"],
                         use_container_width=True, height=250,
                     )
+
+            # ── Atribuição — sobreposição tráfego × disparo ────────────────────
+            if len(overlap_phones) > 0 and considerar_disparo:
+                st.divider()
+                st.markdown('<div class="step-wrap"><div class="step-num">🔀</div><div class="step-text">Atribuição — Tráfego & Disparo</div></div>', unsafe_allow_html=True)
+
+                n_trafego_puro  = len([p for p in trafego_phones if p not in overlap_phones])
+                n_disparo_puro  = len([p for p in disparo_phones if p not in overlap_phones])
+                n_overlap       = len(overlap_phones)
+                n_total_uniq    = n_trafego_puro + n_disparo_puro + n_overlap
+
+                at1, at2, at3, at4 = st.columns(4)
+                at1.metric("Tráfego puro", f"{n_trafego_puro}")
+                at2.metric("Disparo puro", f"{n_disparo_puro}")
+                at3.metric("Tráfego + Disparo", f"{n_overlap}", help="Leads impactados pelo tráfego que também receberam disparo e compraram")
+                at4.metric("Total único de compradores", f"{n_total_uniq}")
+
+                st.info(
+                    f"**{n_overlap} lead(s)** foram impactados pelo tráfego **e** receberam disparo antes de comprar. "
+                    f"Esses leads estão marcados como **'Tráfego + Disparo'** nas tabelas acima. "
+                    f"Para não contar em dobro: considere atribuir ao disparo (último contato antes da compra) "
+                    f"ou ao tráfego (primeiro contato), conforme a política de atribuição da equipe."
+                )
+
+                with st.expander(f"Ver os {n_overlap} leads com sobreposição"):
+                    overlap_df = df_result[df_result["Origem"] == "Tráfego + Disparo"] if len(df_result) > 0 else pd.DataFrame()
+                    if len(overlap_df) > 0:
+                        st.dataframe(overlap_df, use_container_width=True, height=200)
 
             # ── Análise de Duplicatas ───────────────────────────────────────────
             st.divider()
