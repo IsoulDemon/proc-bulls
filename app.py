@@ -549,7 +549,11 @@ def run_disparo(
         if not all_tel8:
             continue
 
+        # Tenta obter a data do disparo de múltiplas fontes (inteligência)
         disp_date = parse_date(kr.get(kommo_date_col)) if kommo_date_col else None
+        if not _is_real_datetime(disp_date):
+            # Fallback: extrai data embutida no texto da tag ("Disparo dia das Mães 22/04")
+            disp_date = parse_date(str(kr.get(kommo_tag_col, "")))
 
         # Dois níveis de match:
         # 1. confirmed: telefone bate + data da venda DENTRO da janela (0..30 dias após disparo)
@@ -1011,6 +1015,29 @@ with col_right:
                 with st.expander("Prévia"):
                     st.dataframe(df_kommo_raw.head(6), use_container_width=True)
 
+st.markdown("#### 📣 Planilha do Kommo — Disparo *(opcional, se arquivo separado do tráfego)*")
+kommo_disparo_file = st.file_uploader(
+    "Se o Kommo de disparo é um arquivo diferente do de tráfego, faça upload aqui",
+    type=["xlsx", "xls", "csv", "xlsm"],
+    key="kommo_disparo_upload",
+    help="Opcional. Se não carregar, o arquivo Kommo principal será usado para ambos tráfego e disparo.",
+)
+df_kommo_disparo_raw: Optional[pd.DataFrame] = None
+if kommo_disparo_file:
+    kd_sheets = get_excel_sheets(kommo_disparo_file)
+    selected_kd_sheets = kd_sheets
+    if len(kd_sheets) > 1:
+        selected_kd_sheets = st.multiselect(
+            "Planilhas do Kommo Disparo:",
+            options=kd_sheets, default=kd_sheets, key="kommo_disp_sheets",
+        )
+    if selected_kd_sheets or not kd_sheets:
+        df_kommo_disparo_raw, kd_info = load_file_multisheet(kommo_disparo_file, selected_kd_sheets)
+        if df_kommo_disparo_raw is not None:
+            st.success(f"✅ Kommo Disparo: {len(df_kommo_disparo_raw):,} linhas · {len(df_kommo_disparo_raw.columns)} colunas")
+            with st.expander("Prévia"):
+                st.dataframe(df_kommo_disparo_raw.head(6), use_container_width=True)
+
 st.divider()
 
 # ── Passo 2: Configuração ──────────────────────────────────────────────────────
@@ -1060,8 +1087,41 @@ if df_sales_raw is not None and df_kommo_raw is not None:
     # ── Configuração de Disparo ────────────────────────────────────────────────
     st.markdown("##### 📣 Disparo")
     none_opt = "(não usar)"
-    auto_kd = detect_date_col(df_kommo_raw)
+
+    # Decide qual Kommo usar para disparo
+    df_kommo_disp = df_kommo_disparo_raw if df_kommo_disparo_raw is not None else df_kommo_raw
+    if df_kommo_disparo_raw is not None:
+        st.caption("📣 Usando o arquivo Kommo Disparo separado para análise de disparo.")
+
+    auto_kd = detect_date_col(df_kommo_disp)
     auto_sd = detect_date_col(df_sales_raw)
+
+    # Se há segundo Kommo, deixa o usuário escolher as colunas dele
+    if df_kommo_disparo_raw is not None:
+        auto_kdp = detect_phone_col(df_kommo_disparo_raw)
+        auto_kdt = detect_tag_col(df_kommo_disparo_raw)
+        dd1, dd2 = st.columns(2)
+        with dd1:
+            kommo_disp_phone_col = st.selectbox(
+                "Telefone — Kommo Disparo",
+                list(df_kommo_disparo_raw.columns),
+                index=_idx(df_kommo_disparo_raw, auto_kdp),
+                key="kommo_disp_phone",
+            )
+            if auto_kdp == kommo_disp_phone_col:
+                st.caption("✨ Auto-detectado")
+        with dd2:
+            kommo_disp_tag_col = st.selectbox(
+                "Coluna de tags — Kommo Disparo",
+                list(df_kommo_disparo_raw.columns),
+                index=_idx(df_kommo_disparo_raw, auto_kdt) if auto_kdt else 0,
+                key="kommo_disp_tag",
+            )
+            if auto_kdt == kommo_disp_tag_col:
+                st.caption("✨ Auto-detectado")
+    else:
+        kommo_disp_phone_col = kommo_phone_col
+        kommo_disp_tag_col = kommo_tag_col
 
     e1, e2, e3 = st.columns(3)
     with e1:
@@ -1072,7 +1132,7 @@ if df_sales_raw is not None and df_kommo_raw is not None:
             key="disparo_kw",
         )
     with e2:
-        kommo_date_opts = [none_opt] + list(df_kommo_raw.columns)
+        kommo_date_opts = [none_opt] + list(df_kommo_disp.columns)
         kommo_date_default = (kommo_date_opts.index(auto_kd)
                               if auto_kd and auto_kd in kommo_date_opts else 0)
         kommo_date_sel = st.selectbox(
@@ -1099,7 +1159,7 @@ if df_sales_raw is not None and df_kommo_raw is not None:
             st.caption("✨ Auto-detectado")
 
     if not kommo_date_col:
-        st.caption("⚠️ Sem data do disparo: todos os matches de disparo serão incluídos — filtre pelo campo Data_Venda no Excel.")
+        st.caption("⚠️ Sem coluna de data selecionada — a ferramenta tentará extrair a data do texto das tags automaticamente.")
 
     considerar_disparo = st.checkbox(
         "📣 Considerar disparo também",
@@ -1129,7 +1189,7 @@ if df_sales_raw is not None and df_kommo_raw is not None:
             if considerar_disparo and disparo_keyword.strip():
                 df_disparo_result = run_disparo(
                     df_sales_raw, sales_phone_col, sales_date_col,
-                    df_kommo_raw, kommo_phone_col, kommo_tag_col,
+                    df_kommo_disp, kommo_disp_phone_col, kommo_disp_tag_col,
                     disparo_keyword, kommo_date_col,
                 )
 
