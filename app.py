@@ -28,7 +28,7 @@ st.set_page_config(
 st.markdown(
     "<style>"
     "@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');"
-    "*,*::before,*::after{font-family:'Inter',-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif!important;-webkit-font-smoothing:antialiased!important}"
+    "html,body,.stApp,.stMarkdown,p,h1,h2,h3,h4,h5,h6,li,label,button,input,textarea,select,.stButton,.stTextInput,.stSelectbox,.stMultiSelect,.stMetric{font-family:'Inter',-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif!important;-webkit-font-smoothing:antialiased!important}"
     ".stApp{background:#000!important}"
     ".main .block-container{padding-top:1.5rem!important;padding-bottom:6rem!important;max-width:1100px!important}"
     ".hero-wrap{text-align:center;padding:2rem 0 0.5rem}"
