@@ -551,25 +551,34 @@ def run_disparo(
 
         disp_date = parse_date(kr.get(kommo_date_col)) if kommo_date_col else None
 
-        matched_sale = None
+        # Dois níveis de match:
+        # 1. confirmed: telefone bate + data da venda DENTRO da janela (0..30 dias após disparo)
+        # 2. phone_only: telefone bate + data da venda não parseável (inclui para revisão manual)
+        # Vendas com data ANTES do disparo são explicitamente rejeitadas.
+        confirmed_sale = None
+        phone_only_sale = None
+
         for tel8 in all_tel8:
+            if confirmed_sale:
+                break
             for sale in sales_lookup.get(tel8, []):
                 if _is_real_datetime(disp_date) and sales_date_col:
-                    # Temos data do disparo E coluna de data da venda:
-                    # EXIGE que a venda seja APÓS o disparo (delta >= 0)
                     sale_dt = sale.get("_dt_venda")
                     if _is_real_datetime(sale_dt):
                         delta = (sale_dt - disp_date).days
                         if 0 <= delta <= window_days:
-                            matched_sale = sale
+                            confirmed_sale = sale
                             break
-                    # Se data da venda não parseou, pula — não dá pra verificar timing
+                        # delta < 0 = venda antes do disparo → rejeita explicitamente
+                    elif phone_only_sale is None:
+                        # data não parseável → guarda como fallback
+                        phone_only_sale = sale
                 else:
-                    # Sem data do disparo ou sem coluna de data: match só por telefone
-                    matched_sale = sale
+                    # sem data de disparo ou sem coluna de data → match por telefone
+                    confirmed_sale = sale
                     break
-            if matched_sale:
-                break
+
+        matched_sale = confirmed_sale if confirmed_sale else phone_only_sale
 
         tag_raw = str(kr.get(kommo_tag_col, ""))
         row_out: dict = {
