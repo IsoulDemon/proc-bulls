@@ -376,13 +376,24 @@ def _normalize(s: str) -> str:
             .replace("ú", "u").replace("õ", "o"))
 
 
+def _is_real_datetime(v) -> bool:
+    """Retorna True apenas para datetime real — exclui pd.NaT que herda de datetime."""
+    if v is None or v is pd.NaT:
+        return False
+    try:
+        v.strftime("%Y")
+        return True
+    except Exception:
+        return False
+
+
 def parse_date(value) -> Optional[datetime]:
-    if value is None:
+    if value is None or value is pd.NaT:
         return None
-    if isinstance(value, datetime):
+    if isinstance(value, datetime) and _is_real_datetime(value):
         return value
     if isinstance(value, pd.Timestamp):
-        return value.to_pydatetime()
+        return value.to_pydatetime() if _is_real_datetime(value) else None
 
     s = str(value).strip()
     if not s or s.lower() in ("nan", "none", "-", "n/a", "#n/a", ""):
@@ -524,9 +535,9 @@ def run_disparo(
         matched_sale = None
         for tel8 in all_tel8:
             for sale in sales_lookup.get(tel8, []):
-                if isinstance(disp_date, datetime) and sales_date_col:
+                if _is_real_datetime(disp_date) and sales_date_col:
                     sale_dt = sale.get("_dt_venda")
-                    if isinstance(sale_dt, datetime):
+                    if _is_real_datetime(sale_dt):
                         delta = (sale_dt - disp_date).days
                         if 0 <= delta <= window_days:
                             matched_sale = sale
@@ -554,9 +565,9 @@ def run_disparo(
             row_out["Venda_Confirmada"] = "SIM"
             if sales_date_col:
                 sale_dt = matched_sale.get("_dt_venda")
-                if isinstance(sale_dt, datetime):
+                if _is_real_datetime(sale_dt):
                     row_out["Data_Venda"] = sale_dt.strftime("%d/%m/%Y")
-                    if isinstance(disp_date, datetime):
+                    if _is_real_datetime(disp_date):
                         row_out["Dias_Após_Disparo"] = (sale_dt - disp_date).days
                 else:
                     row_out["Data_Venda"] = str(matched_sale.get(sales_date_col, ""))
