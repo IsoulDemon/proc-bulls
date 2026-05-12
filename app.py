@@ -173,66 +173,84 @@ def detect_tag_col(df: pd.DataFrame) -> Optional[str]:
 
 def detect_value_col(df: pd.DataFrame) -> Optional[str]:
     """
-    Detecta coluna de valor monetário pontuando por nome + conteúdo + não-zeros.
-    Evita CPF/CNPJ/telefone (inteiros >= 8 dígitos sem decimal).
+    Detecta coluna de valor monetário por análise estatística — sem depender de keywords.
+    Uma coluna de preço tem: separadores decimais, valores não-zero, faixa razoável, variância.
+    Keywords de nome dão um bônus pequeno mas não são obrigatórias.
     """
-    kws = ["valor", "value", "total", "amount", "preco", "preço", "receita",
-           "ticket", "fatura", "price", "vl", "vlr", "bruto", "liquido",
-           "líquido", "sale", "receita", "compra", "pedido_val"]
-    # Colunas a pular por nome
-    skip_kws = ["tel", "cel", "fone", "phone", "whatsapp", "wpp",
-                "numero", "número", "nro", "pedido", "ordem", "nota",
-                " nf", "vendedor", "cliente", "nome", "loja", " lj",
-                "mrg", "margem", "pct", "perc", "%", "cod", "desc_"]
+    # Colunas que NUNCA são preço — só por nome óbvio
+    hard_skip = ["cpf", "cnpj", "rg", "tel", "cel", "fone", "phone",
+                 "whatsapp", "wpp", "percentual", "percent", "taxa", "mrg",
+                 "margem", "desconto", "devolucao", "devolução"]
 
-    def _price_score(v) -> float:
-        """Retorna o valor numérico se parecer preço, ou -1 se não for."""
+    # Keywords de nome para bônus (não obrigatório)
+    bonus_kws = ["valor", "value", "total", "preco", "preço", "receita",
+                 "ticket", "fatura", "price", "vl", "vlr", "bruto", "liquido",
+                 "líquido", "sale", "compra", "amount"]
+
+    def _parse_price(v):
+        """Retorna float se o valor parece preço, None caso contrário."""
         s = re.sub(r"[R$\s]", "", str(v).strip())
         if not s or not re.search(r"\d", s):
-            return -1
-        # Com separador decimal → claramente preço
-        if "," in s or (s.count(".") == 1 and not s.endswith(".")):
+            return None
+        if "," in s:
             try:
-                normalized = s.replace(".", "").replace(",", ".") if "," in s else s
-                val = float(normalized)
-                return val if 0 <= val < 10_000_000 else -1
+                val = float(s.replace(".", "").replace(",", "."))
+                return val if val < 10_000_000 else None
             except ValueError:
-                return -1
-        # Inteiro puro: só aceita < 8 dígitos (CPF=11, tel=8-11)
+                return None
+        # Sem decimal: só aceita se < 8 dígitos (afasta CPF/tel/CNPJ)
         pure = re.sub(r"\D", "", s)
         if 0 < len(pure) < 8:
-            return float(pure)
-        return -1
+            try:
+                return float(pure)
+            except ValueError:
+                return None
+        return None
 
     candidates: list = []
     for col in df.columns:
-        if _is_doc_col(col):
-            continue
         col_lower = col.lower()
-        if any(kw in col_lower for kw in skip_kws):
+        if any(kw in col_lower for kw in hard_skip) or _is_doc_col(col):
             continue
 
-        sample = df[col].dropna().head(40)
-        if len(sample) == 0:
+        sample = df[col].dropna().head(50)
+        if len(sample) < 3:
             continue
 
-        scores = [_price_score(v) for v in sample]
-        valid = [s for s in scores if s >= 0]
-        if len(valid) < max(2, len(sample) * 0.4):
+        parsed = [_parse_price(v) for v in sample]
+        vals = [v for v in parsed if v is not None]
+        if len(vals) < max(2, len(sample) * 0.35):
             continue
 
-        nonzero = sum(1 for s in valid if s > 0)
-        has_decimal = any("," in str(v) for v in sample)
+        n_nonzero = sum(1 for v in vals if v > 0)
+        n_decimal = sum(1 for v in sample if "," in str(v))
+        mean_val = sum(vals) / len(vals)
 
-        name_score = 50 if _match_keywords(col, kws) else 0
-        nonzero_score = int((nonzero / max(len(valid), 1)) * 30)
-        decimal_score = 20 if has_decimal else 0
+        # Coeficiente de variação: preços reais têm variância razoável
+        # (não são todos iguais como "01", "01", "01")
+        if mean_val > 0:
+            std_val = (sum((v - mean_val) ** 2 for v in vals) / len(vals)) ** 0.5
+            cv = std_val / mean_val
+        else:
+            cv = 0
 
-        candidates.append((col, name_score + nonzero_score + decimal_score))
+        # Pontuação estatística — sem depender de nome
+        score = 0
+        score += int((n_decimal / len(sample)) * 35)          # decimal → forte sinal
+        score += int((n_nonzero / max(len(vals), 1)) * 30)    # não-zero → valor real
+        score += 20 if 1 <= mean_val <= 500_000 else 0        # faixa de preço razoável
+        score += 10 if 0.05 <= cv <= 8.0 else 0               # variância adequada
+        score -= 15 if cv < 0.01 and len(vals) > 3 else 0     # penaliza coluna uniforme
+
+        # Bônus por nome (pequeno — não é obrigatório)
+        if any(kw in col_lower for kw in bonus_kws):
+            score += 15
+
+        if score > 10:
+            candidates.append((col, score))
 
     if not candidates:
         return None
-    # Retorna a coluna com maior pontuação
     return max(candidates, key=lambda x: x[1])[0]
 
 
