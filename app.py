@@ -918,6 +918,12 @@ if df_sales_raw is not None and df_kommo_raw is not None:
     if not kommo_date_col:
         st.caption("⚠️ Sem data do disparo: todos os matches de disparo serão incluídos — filtre pelo campo Data_Venda no Excel.")
 
+    considerar_disparo = st.checkbox(
+        "📣 Considerar disparo também",
+        value=True,
+        help="Quando marcado, analisa conversões via disparo mesmo que já existam vendas pelo tráfego.",
+    )
+
     st.divider()
 
     # ── Passo 3: Processar ─────────────────────────────────────────────────────
@@ -951,7 +957,7 @@ if df_sales_raw is not None and df_kommo_raw is not None:
 
             progress.progress(70, text="Analisando disparo...")
             df_disparo_result = None
-            if disparo_keyword.strip():
+            if considerar_disparo and disparo_keyword.strip():
                 df_disparo_result = run_disparo(
                     df_sales_raw, sales_phone_col, sales_date_col,
                     df_kommo_raw, kommo_phone_col, kommo_tag_col,
