@@ -173,50 +173,67 @@ def detect_tag_col(df: pd.DataFrame) -> Optional[str]:
 
 def detect_value_col(df: pd.DataFrame) -> Optional[str]:
     """
-    Detecta coluna de valor monetário.
-    Regras para evitar CPF/CNPJ/telefone serem confundidos com valor:
-    - Valores com separador decimal (1.234,56 ou 640,80) → sempre aceita
-    - Valores inteiros puros → aceita SOMENTE se < 8 dígitos (< R$10M sem centavos)
-    - Inteiros com 8+ dígitos → rejeita (CPF=11 dig, telefone=8-11 dig)
+    Detecta coluna de valor monetário pontuando por nome + conteúdo + não-zeros.
+    Evita CPF/CNPJ/telefone (inteiros >= 8 dígitos sem decimal).
     """
     kws = ["valor", "value", "total", "amount", "preco", "preço", "receita",
-           "ticket", "fatura", "price", "vl_", "vlr", "sale"]
+           "ticket", "fatura", "price", "vl", "vlr", "bruto", "liquido",
+           "líquido", "sale", "receita", "compra", "pedido_val"]
+    # Colunas a pular por nome
     skip_kws = ["tel", "cel", "fone", "phone", "whatsapp", "wpp",
-                "numero", "número", "nro", "pedido", "ordem", "cod", "id"]
+                "numero", "número", "nro", "pedido", "ordem", "nota",
+                " nf", "vendedor", "cliente", "nome", "loja", " lj",
+                "mrg", "margem", "pct", "perc", "%", "cod", "desc_"]
 
-    def _is_price_value(v) -> bool:
+    def _price_score(v) -> float:
+        """Retorna o valor numérico se parecer preço, ou -1 se não for."""
         s = re.sub(r"[R$\s]", "", str(v).strip())
         if not s or not re.search(r"\d", s):
-            return False
-        # Tem separador decimal → provavelmente preço
-        if re.search(r"[,.]", s):
+            return -1
+        # Com separador decimal → claramente preço
+        if "," in s or (s.count(".") == 1 and not s.endswith(".")):
             try:
                 normalized = s.replace(".", "").replace(",", ".") if "," in s else s
-                return 0 <= float(normalized) < 10_000_000
+                val = float(normalized)
+                return val if 0 <= val < 10_000_000 else -1
             except ValueError:
-                return False
-        # Inteiro puro: aceita só se < 8 dígitos (CPF tem 11, telefone tem 8-11)
+                return -1
+        # Inteiro puro: só aceita < 8 dígitos (CPF=11, tel=8-11)
         pure = re.sub(r"\D", "", s)
-        return 0 < len(pure) < 8
+        if 0 < len(pure) < 8:
+            return float(pure)
+        return -1
 
-    def _is_price_col(col: str) -> bool:
-        if _is_doc_col(col) or _match_keywords(col, skip_kws):
-            return False
-        sample = df[col].dropna().head(30)
+    candidates: list = []
+    for col in df.columns:
+        if _is_doc_col(col):
+            continue
+        col_lower = col.lower()
+        if any(kw in col_lower for kw in skip_kws):
+            continue
+
+        sample = df[col].dropna().head(40)
         if len(sample) == 0:
-            return False
-        hits = int(sample.apply(_is_price_value).sum())
-        return hits >= max(2, len(sample) * 0.4)
+            continue
 
-    # Prioridade 1: nome correspondente + conteúdo de preço
-    for col in df.columns:
-        if _match_keywords(col, kws) and _is_price_col(col):
-            return col
-    # Prioridade 2: somente conteúdo (fallback conservador)
-    for col in df.columns:
-        if _is_price_col(col):
-            return col
-    return None
+        scores = [_price_score(v) for v in sample]
+        valid = [s for s in scores if s >= 0]
+        if len(valid) < max(2, len(sample) * 0.4):
+            continue
+
+        nonzero = sum(1 for s in valid if s > 0)
+        has_decimal = any("," in str(v) for v in sample)
+
+        name_score = 50 if _match_keywords(col, kws) else 0
+        nonzero_score = int((nonzero / max(len(valid), 1)) * 30)
+        decimal_score = 20 if has_decimal else 0
+
+        candidates.append((col, name_score + nonzero_score + decimal_score))
+
+    if not candidates:
+        return None
+    # Retorna a coluna com maior pontuação
+    return max(candidates, key=lambda x: x[1])[0]
 
 
 def parse_value(v) -> float:
