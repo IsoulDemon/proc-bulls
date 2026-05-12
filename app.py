@@ -440,6 +440,25 @@ def parse_date(value) -> Optional[datetime]:
             except ValueError:
                 pass
 
+    # Extrai data embutida em texto livre (ex: "Disparo dia das Mães 22/04" ou "23/04/2026 17:42")
+    dm = re.search(r"\b(\d{1,2})[/\-\.](\d{1,2})(?:[/\-\.](\d{2,4}))?\b", s)
+    if dm:
+        try:
+            day, month = int(dm.group(1)), int(dm.group(2))
+            if 1 <= day <= 31 and 1 <= month <= 12:
+                if dm.group(3):
+                    year = int(dm.group(3))
+                    if year < 100:
+                        year += 2000
+                else:
+                    # Sem ano: infere pelo mês atual
+                    # Se o mês extraído > mês atual, é do ano anterior
+                    now = datetime.now()
+                    year = now.year if month <= now.month else now.year - 1
+                return datetime(year, month, day)
+        except (ValueError, TypeError):
+            pass
+
     return None
 
 
