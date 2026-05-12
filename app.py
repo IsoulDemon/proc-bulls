@@ -1708,37 +1708,43 @@ if df_sales_raw is not None and df_kommo_raw is not None:
             df_dup_analysis = analyze_duplicates(df_sales_raw, sales_phone_col, sales_date_col)
 
             progress.progress(90, text="Gerando relatório Excel...")
-            # Calcula receitas para passar ao Excel
-            def _sum_val(df_res):
-                if not sales_value_col or df_res is None or len(df_res) == 0:
-                    return None
-                vcol = f"[Venda] {sales_value_col}"
-                if vcol not in df_res.columns:
-                    return None
-                total = df_res[vcol].apply(parse_value).sum()
-                return float(total) if total > 0 else None
-
-            _tv = _sum_val(df_result)
-            _disp_sim = df_disparo_result[df_disparo_result["Venda_Confirmada"] == "SIM"] if df_disparo_result is not None and len(df_disparo_result) > 0 else None
-            _dv = _sum_val(_disp_sim)
+            # Receita para o Excel: tráfego puro + overlap (não somamos disparo separado pra evitar dupla contagem)
+            _tv_excel = (rev_t or 0) + (rev_o or 0) if rev_total else None
+            _dv_excel = rev_d if rev_d else None
 
             excel_bytes = build_excel(ds_t, dk_t, df_result, df_full, df_disparo_result, df_dup_analysis,
-                                       traffic_revenue=_tv, disparo_revenue=_dv)
+                                       traffic_revenue=_tv_excel, disparo_revenue=_dv_excel)
             st.session_state["excel_bytes"] = excel_bytes
 
             progress.progress(100, text="Concluído!")
             progress.empty()
 
-            # ── Calcula somas de valor ──────────────────────────────────────────
-            def _sum_result_value(df_res: pd.DataFrame) -> Optional[float]:
+            # ── Receita sem dupla contagem — busca direto no arquivo de vendas ──
+            # (evita o problema de aba sem coluna de valor)
+            def _revenue_breakdown(t_phones, d_phones, ov_phones):
+                """Retorna (r_trafego_puro, r_disparo_puro, r_overlap, r_total)"""
                 if not sales_value_col:
-                    return None
-                vcol = f"[Venda] {sales_value_col}"
-                if vcol not in df_res.columns:
-                    return None
-                return df_res[vcol].apply(parse_value).sum()
+                    return None, None, None, None
+                # Mapeia telefone → valor da venda a partir dos dados originais
+                pv: dict = {}
+                for _, row in df_sales_raw.iterrows():
+                    ph = right8(clean_phone(str(row.get(sales_phone_col, ""))))
+                    if ph and ph not in pv:
+                        v = parse_value(row.get(sales_value_col, ""))
+                        if v > 0:
+                            pv[ph] = v
+                r_t = sum(pv.get(p, 0) for p in (t_phones - ov_phones))
+                r_d = sum(pv.get(p, 0) for p in (d_phones - ov_phones))
+                r_o = sum(pv.get(p, 0) for p in ov_phones)
+                total = r_t + r_d + r_o
+                return (r_t if r_t > 0 else None,
+                        r_d if r_d > 0 else None,
+                        r_o if r_o > 0 else None,
+                        total if total > 0 else None)
 
-            traffic_value = _sum_result_value(df_result) if confirmed > 0 else None
+            rev_t, rev_d, rev_o, rev_total = _revenue_breakdown(
+                trafego_phones, disparo_phones, overlap_phones
+            )
 
             # ── Métricas ───────────────────────────────────────────────────────
             st.markdown('<div class="step-wrap"><div class="step-num">✓</div><div class="step-text">Resultados — Tráfego</div></div>', unsafe_allow_html=True)
@@ -1753,12 +1759,6 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                 f"{confirmed:,}",
                 delta=f"{confirmed/total_traffic*100:.1f}% de conv." if total_traffic > 0 else None,
             )
-            if traffic_value is not None:
-                try:
-                    tv = f"R$ {float(traffic_value):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-                except (TypeError, ValueError):
-                    tv = "—"
-                st.metric("💰 Receita total — tráfego", tv)
 
             st.divider()
 
@@ -1783,19 +1783,10 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                 disp_rate = f"{disp_conv/disp_total*100:.1f}%" if disp_total > 0 else "—"
 
             if df_disparo_result is not None and len(df_disparo_result) > 0:
-                disp_confirmed_df = df_disparo_result[df_disparo_result["Venda_Confirmada"] == "SIM"]
-                disp_value = _sum_result_value(disp_confirmed_df)
-
                 dm1, dm2, dm3 = st.columns(3)
                 dm1.metric("Leads de disparo", f"{disp_total:,}")
                 dm2.metric("Conversões confirmadas", f"{disp_conv:,}")
                 dm3.metric("Taxa de conversão", disp_rate)
-                if disp_value is not None:
-                    try:
-                        dv = f"R$ {float(disp_value):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-                    except (TypeError, ValueError):
-                        dv = "—"
-                    st.metric("💰 Receita total — disparo", dv)
 
                 if kommo_date_col and sales_date_col:
                     st.success(f"🎯 {disp_conv} conversões dentro da janela de 30 dias após o disparo.")
@@ -1818,33 +1809,47 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                         use_container_width=True, height=250,
                     )
 
-            # ── Atribuição — sobreposição tráfego × disparo ────────────────────
-            if len(overlap_phones) > 0 and considerar_disparo:
-                st.divider()
-                st.markdown('<div class="step-wrap"><div class="step-num">🔀</div><div class="step-text">Atribuição — Tráfego & Disparo</div></div>', unsafe_allow_html=True)
+            # ── Atribuição & Receita Total (sem dupla contagem) ────────────────
+            st.divider()
+            st.markdown('<div class="step-wrap"><div class="step-num">🔀</div><div class="step-text">Atribuição & Receita Total</div></div>', unsafe_allow_html=True)
 
-                n_trafego_puro  = len([p for p in trafego_phones if p not in overlap_phones])
-                n_disparo_puro  = len([p for p in disparo_phones if p not in overlap_phones])
-                n_overlap       = len(overlap_phones)
-                n_total_uniq    = n_trafego_puro + n_disparo_puro + n_overlap
+            n_traf_puro = len(trafego_phones - overlap_phones)
+            n_disp_puro = len(disparo_phones - overlap_phones)
+            n_overlap   = len(overlap_phones)
+            n_total_uniq = n_traf_puro + n_disp_puro + n_overlap
 
-                at1, at2, at3, at4 = st.columns(4)
-                at1.metric("Tráfego puro", f"{n_trafego_puro}")
-                at2.metric("Disparo puro", f"{n_disparo_puro}")
-                at3.metric("Tráfego + Disparo", f"{n_overlap}", help="Leads impactados pelo tráfego que também receberam disparo e compraram")
-                at4.metric("Total único de compradores", f"{n_total_uniq}")
+            at1, at2, at3, at4 = st.columns(4)
+            at1.metric("Tráfego puro", f"{n_traf_puro}",
+                       help="Compradores que vieram APENAS do tráfego pago.")
+            at2.metric("Disparo puro", f"{n_disp_puro}",
+                       help="Compradores que compraram APENAS após o disparo.")
+            at3.metric("Tráfego + Disparo", f"{n_overlap}",
+                       help="Vieram do tráfego E receberam disparo. Contados UMA vez no total.")
+            at4.metric("Total único de compradores", f"{n_total_uniq}",
+                       help="Soma sem dupla contagem: tráfego puro + disparo puro + sobreposição (1x).")
 
+            if rev_total is not None:
+                st.markdown("##### 💰 Receita sem dupla contagem")
+                rc1, rc2, rc3, rc4 = st.columns(4)
+                rc1.metric("Receita — Tráfego puro",    _brl(rev_t or 0) if rev_t else "—")
+                rc2.metric("Receita — Disparo puro",    _brl(rev_d or 0) if rev_d else "—")
+                rc3.metric("Receita — Sobreposição",    _brl(rev_o or 0) if rev_o else "—",
+                           help="Valor das vendas de quem foi impactado pelos dois canais. Contado UMA vez.")
+                rc4.metric("TOTAL GERAL", _brl(rev_total),
+                           help="Tráfego puro + Disparo puro + Sobreposição. Sem nenhuma venda duplicada.")
+
+            if n_overlap > 0:
                 st.info(
-                    f"**{n_overlap} lead(s)** foram impactados pelo tráfego **e** receberam disparo antes de comprar. "
-                    f"Esses leads estão marcados como **'Tráfego + Disparo'** nas tabelas acima. "
-                    f"Para não contar em dobro: considere atribuir ao disparo (último contato antes da compra) "
-                    f"ou ao tráfego (primeiro contato), conforme a política de atribuição da equipe."
+                    f"**{n_overlap} comprador(es)** foram impactados pelo tráfego **e** receberam disparo. "
+                    f"Estão marcados como **'Tráfego + Disparo'** nas tabelas e contados **uma única vez** no total."
                 )
-
-                with st.expander(f"Ver os {n_overlap} leads com sobreposição"):
-                    overlap_df = df_result[df_result["Origem"] == "Tráfego + Disparo"] if len(df_result) > 0 else pd.DataFrame()
-                    if len(overlap_df) > 0:
-                        st.dataframe(overlap_df, use_container_width=True, height=200)
+                with st.expander(f"Ver os {n_overlap} com sobreposição"):
+                    ov_df = df_result[df_result.get("Origem", pd.Series()) == "Tráfego + Disparo"] if len(df_result) > 0 and "Origem" in df_result.columns else pd.DataFrame()
+                    if len(ov_df) > 0:
+                        st.dataframe(ov_df, use_container_width=True, height=200)
+            elif not considerar_disparo or df_disparo_result is None:
+                if rev_total is not None:
+                    st.caption("Apenas tráfego analisado — receita total = receita de tráfego.")
 
             # ── Análise de Duplicatas ───────────────────────────────────────────
             st.divider()
