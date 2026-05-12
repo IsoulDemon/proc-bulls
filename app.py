@@ -222,6 +222,13 @@ class _FileLike:
     def __init__(self, data: bytes, name: str):
         self._buf = io.BytesIO(data)
         self.name = name
+
+    def __getattr__(self, attr):
+        """Delega QUALQUER método não definido aqui para o BytesIO interno.
+        Isso cobre tell, seekable, readable, getvalue, etc. sem precisar
+        declarar cada um individualmente."""
+        return getattr(self._buf, attr)
+
     def read(self, *a): return self._buf.read(*a)
     def seek(self, *a): return self._buf.seek(*a)
     def tell(self, *a): return self._buf.tell(*a)
@@ -1197,6 +1204,8 @@ if df_sales_raw is not None and df_kommo_raw is not None:
             "Coluna de telefone — Vendas",
             list(df_sales_raw.columns),
             index=_idx(df_sales_raw, auto_sp),
+            help="Coluna da planilha de vendas com o telefone/WhatsApp do cliente. "
+                 "A ferramenta usa os últimos 8 dígitos para comparar — funciona mesmo com DDD, sem DDD, com ou sem o 9.",
         )
         if auto_sp == sales_phone_col:
             st.caption("✨ Auto-detectado")
@@ -1205,6 +1214,8 @@ if df_sales_raw is not None and df_kommo_raw is not None:
             "Coluna de telefone — Kommo",
             list(df_kommo_raw.columns),
             index=_idx(df_kommo_raw, auto_kp),
+            help="Coluna do Kommo com o telefone do lead (geralmente 'Celular'). "
+                 "Mesmo que o número esteja em outra coluna, a ferramenta testa todas automaticamente.",
         )
         if auto_kp == kommo_phone_col:
             st.caption("✨ Auto-detectado")
@@ -1213,14 +1224,20 @@ if df_sales_raw is not None and df_kommo_raw is not None:
             "Coluna de tags — Kommo",
             list(df_kommo_raw.columns),
             index=_idx(df_kommo_raw, auto_kt) if auto_kt else 0,
+            help="Coluna do Kommo onde estão as etiquetas dos leads (geralmente 'Tags'). "
+                 "É aqui que a ferramenta procura as palavras-chave de tráfego e de disparo.",
         )
         if auto_kt == kommo_tag_col:
             st.caption("✨ Auto-detectado")
     with c4:
         traffic_keyword = st.text_input(
-            "Palavra-chave da tag de tráfego",
+            "Tag de tráfego — palavra-chave",
             value="trafego",
-            help="A busca é case-insensitive e parcial. Ex: 'trafego' encontra 'Lead Tráfego Pago'.",
+            placeholder="Cole aqui como está no Kommo...",
+            help="Cole aqui um trecho da tag de tráfego exatamente como aparece no Kommo. "
+                 "Não precisa ser a tag completa — um pedaço já resolve. "
+                 "A busca ignora maiúsculas/minúsculas e acentos. "
+                 "Exemplos: 'trafego', 'pago', 'ads', 'lead trafego'.",
         )
 
     # Coluna de valor monetário
@@ -1228,8 +1245,10 @@ if df_sales_raw is not None and df_kommo_raw is not None:
     val_opts = [none_val] + list(df_sales_raw.columns)
     val_default = val_opts.index(auto_vl) if auto_vl and auto_vl in val_opts else 0
     sales_value_col_sel = st.selectbox(
-        "Coluna de **valor da venda** *(opcional — para somar receita nos resultados)*",
+        "Coluna de valor da venda *(opcional)*",
         val_opts, index=val_default, key="sales_value_col",
+        help="Se a planilha de vendas tiver uma coluna com o valor em R$ de cada venda, selecione aqui. "
+             "A ferramenta vai calcular e exibir a receita total de tráfego e de disparo.",
     )
     sales_value_col = None if sales_value_col_sel == none_val else sales_value_col_sel
     if auto_vl == sales_value_col:
@@ -1277,9 +1296,14 @@ if df_sales_raw is not None and df_kommo_raw is not None:
     e1, e2, e3 = st.columns(3)
     with e1:
         disparo_keyword = st.text_input(
-            "Palavra-chave da tag de disparo",
+            "Tag de disparo — palavra-chave",
             value="disparo",
-            help="Leads do Kommo com essa tag serão analisados como disparo.",
+            placeholder="Cole aqui como está a tag no Kommo...",
+            help="Cole aqui um trecho da tag de disparo exatamente como aparece no Kommo. "
+                 "Não precisa ser a tag completa — um pedaço já basta. "
+                 "Exemplos: se no Kommo a tag for 'recebeu disparo dia das mães', "
+                 "pode digitar apenas 'disparo' ou 'recebeu disparo' ou 'dia das mães'. "
+                 "A busca é parcial e ignora maiúsculas/minúsculas.",
             key="disparo_kw",
         )
     with e2:
@@ -1291,6 +1315,10 @@ if df_sales_raw is not None and df_kommo_raw is not None:
             kommo_date_opts,
             index=kommo_date_default,
             key="kommo_date",
+            help="Selecione a coluna do Kommo que contém a data em que o disparo foi feito. "
+                 "Se a data estiver embutida no texto da tag (ex: 'Disparo 22/04'), "
+                 "a ferramenta extrai automaticamente — deixe em '(não usar)' nesse caso. "
+                 "A data do disparo é usada para garantir que só vendas APÓS o disparo sejam contadas.",
         )
         kommo_date_col = None if kommo_date_sel == none_opt else kommo_date_sel
         if auto_kd == kommo_date_col:
@@ -1304,13 +1332,17 @@ if df_sales_raw is not None and df_kommo_raw is not None:
             sales_date_opts,
             index=sales_date_default,
             key="sales_date",
+            help="Coluna da planilha de vendas com a data em que a compra foi realizada. "
+                 "Usada para validar que a venda aconteceu DEPOIS do disparo (janela de 30 dias). "
+                 "Se não tiver essa coluna, a ferramenta ainda encontra as vendas — "
+                 "mas não consegue garantir a ordem cronológica.",
         )
         sales_date_col = None if sales_date_sel == none_opt else sales_date_sel
         if auto_sd == sales_date_col:
             st.caption("✨ Auto-detectado")
 
     if not kommo_date_col:
-        st.caption("⚠️ Sem coluna de data selecionada — a ferramenta tentará extrair a data do texto das tags automaticamente.")
+        st.caption("ℹ️ Sem coluna de data do disparo: a ferramenta tentará extrair a data do texto da tag automaticamente (ex: 'Disparo 22/04').")
 
     considerar_disparo = st.checkbox(
         "📣 Considerar disparo também",
