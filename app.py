@@ -108,11 +108,14 @@ def clean_phone(raw) -> str:
 
 
 def right8(phone_clean: str) -> str:
-    """Últimos 8 dígitos — padroniza números com/sem 9 e com/sem DDD."""
+    """Últimos 8 dígitos — padroniza números com/sem 9 e com/sem DDD.
+    Retorna '' se < 8 dígitos para evitar colisões com números curtos."""
     if not phone_clean:
         return ""
     digits = re.sub(r"\D", "", str(phone_clean))
-    return digits[-8:] if len(digits) >= 8 else digits
+    if len(digits) < 8:
+        return ""  # Muito curto para ser telefone — descarta
+    return digits[-8:]
 
 
 # ── Detecção automática de colunas ─────────────────────────────────────────────
@@ -342,13 +345,26 @@ def _is_phone_col(col_data: pd.Series) -> bool:
     return phone_like >= 2
 
 
+_DOC_COLS = {"cpf", "cnpj", "rg", "documento", "doc", "inscricao", "inscrição",
+             "cadastro_pessoa", "cpf_cnpj", "identificacao", "identificação"}
+
+def _is_doc_col(col_name: str) -> bool:
+    """Retorna True se o nome da coluna sugere CPF/CNPJ/RG — evita falsos matches."""
+    c = col_name.lower()
+    return any(kw in c for kw in _DOC_COLS)
+
+
 def _build_extended_lookup(df: pd.DataFrame, ds_with_meta: pd.DataFrame) -> dict:
     """
     Constrói {right8_key: row_dict} varrendo TODAS as colunas de telefone de df.
-    Usa ds_with_meta (que já tem colunas extras) como fonte dos dicts de linha.
+    Pula colunas de documentos (CPF/CNPJ/RG) para evitar colisões.
     """
+    # Rastreia quais índices já foram adicionados (evita Bug 4: mesma linha sob 2 chaves)
+    added_idx: set = set()
     lookup: dict = {}
     for col in df.columns:
+        if _is_doc_col(col):
+            continue
         col_data = df[col].dropna()
         if not _is_phone_col(col_data):
             continue
@@ -358,6 +374,7 @@ def _build_extended_lookup(df: pd.DataFrame, ds_with_meta: pd.DataFrame) -> dict
                 key = right8(cleaned)
                 if key and key not in lookup:
                     lookup[key] = ds_with_meta.loc[idx].to_dict()
+                    added_idx.add(idx)
     return lookup
 
 
@@ -424,6 +441,10 @@ def run_procv(
     df_trafego = df_full[
         (df_full["É_Tráfego"] == "SIM") & (df_full["Venda_Confirmada"] == "SIM")
     ].copy()
+    # Bug 2: deduplica por comprador único — mesmo telefone em vários leads Kommo
+    # não deve contar como múltiplas conversões
+    if len(df_trafego) > 0:
+        df_trafego = df_trafego.drop_duplicates(subset=["Tel_8dig"]).reset_index(drop=True)
 
     return ds, dk, df_trafego, df_full
 
@@ -611,9 +632,12 @@ def run_disparo(
         ds["_dt_venda"] = ds[sales_date_col].apply(parse_date)
 
     # Lookup estendido: todas as colunas de telefone das vendas
-    added: set = set()
+    # added_sale_idx: evita Bug 4 — mesma linha sob chaves diferentes (2 colunas de tel)
+    added_sale_keys: set = set()  # (key, idx) para evitar duplicar por key
     sales_lookup: dict = {}
     for col in df_sales.columns:
+        if _is_doc_col(col):
+            continue
         col_data = df_sales[col].dropna()
         if not _is_phone_col(col_data):
             continue
@@ -621,9 +645,9 @@ def run_disparo(
             cleaned = clean_phone(str(df_sales.at[idx, col]))
             if len(cleaned) >= 8:
                 key = right8(cleaned)
-                if key and (key, idx) not in added:
+                if key and (key, idx) not in added_sale_keys:
                     sales_lookup.setdefault(key, []).append(ds.loc[idx].to_dict())
-                    added.add((key, idx))
+                    added_sale_keys.add((key, idx))
 
     result_rows = []
     for _, kr in df_disp_leads.iterrows():
@@ -715,7 +739,17 @@ def run_disparo(
 
         result_rows.append(row_out)
 
-    return pd.DataFrame(result_rows) if result_rows else pd.DataFrame()
+    if not result_rows:
+        return pd.DataFrame()
+    df_res = pd.DataFrame(result_rows)
+    # Deduplica por Tel_8dig: mesmo comprador em múltiplos leads Kommo não conta N vezes.
+    # Prioriza Venda_Confirmada=SIM sobre NÃO antes de desduplicar.
+    if "Tel_8dig" in df_res.columns:
+        df_res = (df_res
+                  .sort_values("Venda_Confirmada", ascending=True)  # NÃO < SIM
+                  .drop_duplicates(subset=["Tel_8dig"])
+                  .reset_index(drop=True))
+    return df_res
 
 
 # ── Análise de Duplicatas ──────────────────────────────────────────────────────
@@ -1299,6 +1333,7 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                 traffic_keyword,
             )
 
+            # Compradores únicos (deduplicado por Tel_8dig no run_procv)
             confirmed = len(df_result)
 
             progress.progress(60, text="Analisando disparo...")
@@ -1368,6 +1403,7 @@ if df_sales_raw is not None and df_kommo_raw is not None:
             elif df_disparo_result is None or len(df_disparo_result) == 0:
                 st.warning(f"Nenhum lead encontrado com a tag **\"{disparo_keyword}\"** no Kommo. Verifique a palavra-chave ou a coluna de tags selecionada.")
             else:
+                # Após dedup por Tel_8dig em run_disparo, cada linha = 1 comprador único
                 disp_conv = int((df_disparo_result["Venda_Confirmada"] == "SIM").sum())
                 disp_total = len(df_disparo_result)
                 disp_rate = f"{disp_conv/disp_total*100:.1f}%" if disp_total > 0 else "—"
