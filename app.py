@@ -555,16 +555,17 @@ def run_disparo(
         for tel8 in all_tel8:
             for sale in sales_lookup.get(tel8, []):
                 if _is_real_datetime(disp_date) and sales_date_col:
+                    # Temos data do disparo E coluna de data da venda:
+                    # EXIGE que a venda seja APÓS o disparo (delta >= 0)
                     sale_dt = sale.get("_dt_venda")
                     if _is_real_datetime(sale_dt):
                         delta = (sale_dt - disp_date).days
                         if 0 <= delta <= window_days:
                             matched_sale = sale
                             break
-                    else:
-                        matched_sale = sale
-                        break
+                    # Se data da venda não parseou, pula — não dá pra verificar timing
                 else:
+                    # Sem data do disparo ou sem coluna de data: match só por telefone
                     matched_sale = sale
                     break
             if matched_sale:
@@ -1175,6 +1176,16 @@ if df_sales_raw is not None and df_kommo_raw is not None:
 
                 if kommo_date_col and sales_date_col:
                     st.success(f"🎯 {disp_conv} conversões dentro da janela de 30 dias após o disparo.")
+                    if disp_conv == 0:
+                        # Diagnóstico: mostra amostra de datas para ajudar o usuário a identificar o problema
+                        with st.expander("🔎 Diagnóstico — por que não encontrou conversões?"):
+                            sample_kommo = df_kommo_raw[
+                                df_kommo_raw[kommo_tag_col].fillna("").str.lower().str.contains(disparo_keyword.lower(), regex=False)
+                            ][kommo_date_col].dropna().head(5).tolist()
+                            sample_sales = df_sales_raw[sales_date_col].dropna().head(5).tolist()
+                            st.markdown(f"**Amostra de datas do Kommo ({kommo_date_col}):** `{sample_kommo}`")
+                            st.markdown(f"**Amostra de datas das vendas ({sales_date_col}):** `{sample_sales}`")
+                            st.caption("Se as datas aparecem mas as conversões são 0, verifique se o formato está sendo reconhecido e se as vendas realmente ocorreram APÓS o disparo.")
                 else:
                     st.info("📅 Datas parciais ou ausentes — filtre pela coluna Data_Venda no Excel para analisar por competência.")
 
