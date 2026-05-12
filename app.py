@@ -221,6 +221,7 @@ class _FileLike:
         self.name = name
     def read(self, *a): return self._buf.read(*a)
     def seek(self, *a): return self._buf.seek(*a)
+    def tell(self, *a): return self._buf.tell(*a)
 
 
 @st.cache_data(show_spinner=False)
@@ -1344,10 +1345,11 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                 delta=f"{confirmed/total_traffic*100:.1f}% de conv." if total_traffic > 0 else None,
             )
             if traffic_value is not None:
-                st.metric(
-                    "💰 Receita total — tráfego",
-                    f"R$ {traffic_value:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
-                )
+                try:
+                    tv = f"R$ {float(traffic_value):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                except (TypeError, ValueError):
+                    tv = "—"
+                st.metric("💰 Receita total — tráfego", tv)
 
             st.divider()
 
@@ -1379,10 +1381,11 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                 dm2.metric("Conversões confirmadas", f"{disp_conv:,}")
                 dm3.metric("Taxa de conversão", disp_rate)
                 if disp_value is not None:
-                    st.metric(
-                        "💰 Receita total — disparo",
-                        f"R$ {disp_value:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
-                    )
+                    try:
+                        dv = f"R$ {float(disp_value):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                    except (TypeError, ValueError):
+                        dv = "—"
+                    st.metric("💰 Receita total — disparo", dv)
 
                 if kommo_date_col and sales_date_col:
                     st.success(f"🎯 {disp_conv} conversões dentro da janela de 30 dias após o disparo.")
