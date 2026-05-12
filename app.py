@@ -524,9 +524,9 @@ def run_disparo(
         matched_sale = None
         for tel8 in all_tel8:
             for sale in sales_lookup.get(tel8, []):
-                if disp_date and sales_date_col:
+                if isinstance(disp_date, datetime) and sales_date_col:
                     sale_dt = sale.get("_dt_venda")
-                    if sale_dt:
+                    if isinstance(sale_dt, datetime):
                         delta = (sale_dt - disp_date).days
                         if 0 <= delta <= window_days:
                             matched_sale = sale
@@ -554,12 +554,12 @@ def run_disparo(
             row_out["Venda_Confirmada"] = "SIM"
             if sales_date_col:
                 sale_dt = matched_sale.get("_dt_venda")
-                row_out["Data_Venda"] = (
-                    sale_dt.strftime("%d/%m/%Y") if sale_dt
-                    else str(matched_sale.get(sales_date_col, ""))
-                )
-                if disp_date and sale_dt:
-                    row_out["Dias_Após_Disparo"] = (sale_dt - disp_date).days
+                if isinstance(sale_dt, datetime):
+                    row_out["Data_Venda"] = sale_dt.strftime("%d/%m/%Y")
+                    if isinstance(disp_date, datetime):
+                        row_out["Dias_Após_Disparo"] = (sale_dt - disp_date).days
+                else:
+                    row_out["Data_Venda"] = str(matched_sale.get(sales_date_col, ""))
             for col in df_sales.columns:
                 row_out[f"[Venda] {col}"] = matched_sale.get(col, "")
         else:
