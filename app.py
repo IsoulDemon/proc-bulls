@@ -172,28 +172,49 @@ def detect_tag_col(df: pd.DataFrame) -> Optional[str]:
 
 
 def detect_value_col(df: pd.DataFrame) -> Optional[str]:
-    """Detecta coluna de valor monetário na planilha de vendas."""
+    """
+    Detecta coluna de valor monetário.
+    Regras para evitar CPF/CNPJ/telefone serem confundidos com valor:
+    - Valores com separador decimal (1.234,56 ou 640,80) → sempre aceita
+    - Valores inteiros puros → aceita SOMENTE se < 8 dígitos (< R$10M sem centavos)
+    - Inteiros com 8+ dígitos → rejeita (CPF=11 dig, telefone=8-11 dig)
+    """
     kws = ["valor", "value", "total", "amount", "preco", "preço", "receita",
-           "ticket", "fatura", "price", "vl_", "vlr", "sale", "receita"]
-    def _is_numeric_col(col: str) -> bool:
+           "ticket", "fatura", "price", "vl_", "vlr", "sale"]
+    skip_kws = ["tel", "cel", "fone", "phone", "whatsapp", "wpp",
+                "numero", "número", "nro", "pedido", "ordem", "cod", "id"]
+
+    def _is_price_value(v) -> bool:
+        s = re.sub(r"[R$\s]", "", str(v).strip())
+        if not s or not re.search(r"\d", s):
+            return False
+        # Tem separador decimal → provavelmente preço
+        if re.search(r"[,.]", s):
+            try:
+                normalized = s.replace(".", "").replace(",", ".") if "," in s else s
+                return 0 <= float(normalized) < 10_000_000
+            except ValueError:
+                return False
+        # Inteiro puro: aceita só se < 8 dígitos (CPF tem 11, telefone tem 8-11)
+        pure = re.sub(r"\D", "", s)
+        return 0 < len(pure) < 8
+
+    def _is_price_col(col: str) -> bool:
+        if _is_doc_col(col) or _match_keywords(col, skip_kws):
+            return False
         sample = df[col].dropna().head(30)
         if len(sample) == 0:
             return False
-        hits = sample.apply(
-            lambda v: bool(re.match(r"^[\s\dR$.,]+$", str(v).strip())) and
-                      bool(re.search(r"\d", str(v)))
-        ).sum()
-        return int(hits) >= max(2, len(sample) * 0.5)
-    # Primeiro: por nome + conteúdo numérico
+        hits = int(sample.apply(_is_price_value).sum())
+        return hits >= max(2, len(sample) * 0.4)
+
+    # Prioridade 1: nome correspondente + conteúdo de preço
     for col in df.columns:
-        if _match_keywords(col, kws) and _is_numeric_col(col):
+        if _match_keywords(col, kws) and _is_price_col(col):
             return col
-    # Fallback: primeira coluna com conteúdo numérico (que não seja telefone)
-    phone_kws = ["tel", "cel", "fone", "phone", "whatsapp", "wpp", "numero", "número"]
+    # Prioridade 2: somente conteúdo (fallback conservador)
     for col in df.columns:
-        if _match_keywords(col, phone_kws):
-            continue
-        if _is_numeric_col(col):
+        if _is_price_col(col):
             return col
     return None
 
