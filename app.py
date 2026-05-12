@@ -1012,6 +1012,160 @@ def _write_sheet(
         ws.auto_filter.ref = f"A2:{last_col}{len(df)+2}"
 
 
+def _rename_result_cols(df: pd.DataFrame) -> pd.DataFrame:
+    """Renomeia colunas técnicas para linguagem legível no Excel."""
+    return df.rename(columns={
+        "Venda_Confirmada": "Comprou?",
+        "É_Tráfego": "É Lead de Tráfego?",
+        "Tag_Kommo": "Tag no Kommo",
+        "Telefone_Kommo": "Telefone (Kommo)",
+        "Telefone_Disparo": "Telefone (Disparo)",
+        "Tel_8dig": "Tel. (8 dígitos)",
+        "Tel_Limpo_Vendas": "Tel. Limpo (Vendas)",
+        "Tel_8dig_Vendas": "Tel. 8 dígitos (Vendas)",
+        "Tel_Limpo_Kommo": "Tel. Limpo (Kommo)",
+        "Tel_8dig_Kommo": "Tel. 8 dígitos (Kommo)",
+        "Data_Disparo": "Data do Disparo",
+        "Data_Venda": "Data da Venda",
+        "Dias_Após_Disparo": "Dias após o Disparo",
+        "Situacao_Venda": "Situação do Registro",
+        "Origem": "Origem da Venda",
+    })
+
+
+def _write_guide_sheet(ws, summary_data: dict):
+    """Escreve a aba 'Como Ler' com explicações claras para o usuário final."""
+    PURPLE = "7B2FBE"
+    DARK   = "1C1C1E"
+    WHITE  = "FFFFFF"
+    GRAY   = "F5F5F7"
+    GREEN  = "27AE60"
+    ORANGE = "E67E22"
+    RED    = "C0392B"
+    BLUE   = "2471A3"
+
+    def _title(row, text, hex_bg=PURPLE):
+        ws.merge_cells(f"A{row}:D{row}")
+        c = ws.cell(row, 1, text)
+        c.font = Font(color=WHITE, bold=True, size=13)
+        c.fill = PatternFill("solid", fgColor=hex_bg)
+        c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+        ws.row_dimensions[row].height = 28
+
+    def _row(row, label, desc, label_bold=False):
+        ws.merge_cells(f"B{row}:D{row}")
+        a = ws.cell(row, 1, label)
+        a.font = Font(bold=label_bold, size=10)
+        a.fill = PatternFill("solid", fgColor=GRAY)
+        a.alignment = Alignment(vertical="center", indent=1)
+        b = ws.cell(row, 2, desc)
+        b.font = Font(size=10)
+        b.alignment = Alignment(vertical="center", wrap_text=True, indent=1)
+        ws.row_dimensions[row].height = 20
+
+    def _color_legend(row, color_hex, label, meaning):
+        ws.cell(row, 1, "  ██").font = Font(color=color_hex, size=14, bold=True)
+        ws.cell(row, 1).fill = PatternFill("solid", fgColor=GRAY)
+        ws.merge_cells(f"B{row}:C{row}")
+        ws.cell(row, 2, label).font = Font(bold=True, size=10)
+        ws.cell(row, 4, meaning).font = Font(size=10)
+        ws.row_dimensions[row].height = 18
+
+    r = 1
+    # ── Cabeçalho ─────────────────────────────────────────────────────
+    ws.merge_cells(f"A{r}:D{r}")
+    hdr = ws.cell(r, 1, "📋  PROC-BULLS — GUIA DE LEITURA")
+    hdr.font = Font(color=WHITE, bold=True, size=16)
+    hdr.fill = PatternFill("solid", fgColor=PURPLE)
+    hdr.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[r].height = 40
+    r += 1
+
+    ws.merge_cells(f"A{r}:D{r}")
+    sub = ws.cell(r, 1, "Desenvolvido por João  ·  Aure Digital  ·  Proc-Bulls")
+    sub.font = Font(italic=True, size=10, color="888888")
+    sub.alignment = Alignment(horizontal="center")
+    ws.row_dimensions[r].height = 18
+    r += 2
+
+    # ── O que é este relatório ────────────────────────────────────────
+    _title(r, "O QUE É ESTE RELATÓRIO?", DARK); r += 1
+    ws.merge_cells(f"A{r}:D{r}")
+    ws.cell(r, 1, (
+        "Este relatório cruza sua planilha de vendas com o Kommo CRM para identificar "
+        "quantas vendas vieram do tráfego pago e/ou de campanhas de disparo (WhatsApp)."
+    )).font = Font(size=10)
+    ws.cell(r, 1).alignment = Alignment(wrap_text=True, indent=1)
+    ws.row_dimensions[r].height = 30
+    r += 2
+
+    # ── Abas do relatório ─────────────────────────────────────────────
+    _title(r, "ABAS DESTE ARQUIVO — O QUE CADA UMA CONTÉM", DARK); r += 1
+    sheets_info = [
+        ("📋 Como Ler",              "Esta aba. Leia primeiro."),
+        ("📊 Resumo",                "Números principais: conversões, receita, taxas. Comece aqui."),
+        ("✅ Vendas — Tráfego",      "Leads que vieram do tráfego pago E fizeram uma compra."),
+        ("📣 Vendas — Disparo",      "Leads que receberam disparo E fizeram uma compra dentro de 30 dias."),
+        ("🔍 Duplicatas",            "Registros duplicados na planilha de vendas (se houver)."),
+        ("📋 Todos os Leads",        "Todos os leads do Kommo, com coluna 'Comprou?' para filtrar."),
+        ("📦 Vendas (dados brutos)", "Sua planilha de vendas original, processada."),
+        ("🗂️ Kommo (dados brutos)",  "Sua planilha do Kommo, processada."),
+    ]
+    for name, desc in sheets_info:
+        _row(r, name, desc, label_bold=True); r += 1
+    r += 1
+
+    # ── Colunas importantes ───────────────────────────────────────────
+    _title(r, "COLUNAS IMPORTANTES — O QUE CADA UMA SIGNIFICA", DARK); r += 1
+    cols_info = [
+        ("Comprou?",             "SIM = lead fez uma compra | NÃO = não encontramos venda para este lead"),
+        ("É Lead de Tráfego?",   "SIM = lead tem a tag de tráfego pago no Kommo"),
+        ("Origem da Venda",      "Tráfego / Disparo / Tráfego + Disparo (foi impactado pelos dois)"),
+        ("Tel. (8 dígitos)",     "Últimos 8 dígitos do telefone — usados para comparar as listas"),
+        ("Dias após o Disparo",  "Quantos dias após o disparo a venda aconteceu (máx. 30 dias conta)"),
+        ("Situação do Registro", "Única / Multi-compra / DUPLICATA — análise de repetição nas vendas"),
+    ]
+    for col, desc in cols_info:
+        _row(r, col, desc); r += 1
+    r += 1
+
+    # ── Legenda de cores ──────────────────────────────────────────────
+    _title(r, "LEGENDA DE CORES NAS TABELAS", DARK); r += 1
+    colors = [
+        (GREEN,  "Verde",   "Venda confirmada (Comprou? = SIM)"),
+        (RED,    "Vermelho","Não comprou (Comprou? = NÃO) | Duplicata"),
+        (BLUE,   "Azul",    "Lead de tráfego pago | Multi-compra"),
+        (ORANGE, "Laranja", "Atenção: mesmo dia / sem data confirmada"),
+    ]
+    for hex_c, name, meaning in colors:
+        _color_legend(r, hex_c, name, meaning); r += 1
+    r += 1
+
+    # ── Como interpretar ──────────────────────────────────────────────
+    _title(r, "COMO INTERPRETAR OS RESULTADOS", DARK); r += 1
+    tips = [
+        ("Tráfego puro",      "Lead veio de anúncio e comprou — conversão de tráfego."),
+        ("Disparo puro",      "Lead recebeu WhatsApp e comprou em até 30 dias — conversão de disparo."),
+        ("Tráfego + Disparo", "Lead veio de anúncio MAS só comprou depois do disparo. A equipe decide a quem atribuir."),
+        ("Duplicata",         "Mesmo cliente, mesma data, mesmo valor — provável lançamento duplo no sistema. Verificar."),
+        ("Multi-compra",      "Mesmo número, datas diferentes — cliente recorrente. Contar normalmente."),
+    ]
+    for label, desc in tips:
+        _row(r, label, desc, label_bold=True); r += 1
+    r += 1
+
+    # ── Resumo de números ─────────────────────────────────────────────
+    if summary_data:
+        _title(r, "RESUMO RÁPIDO DOS NÚMEROS", "FF6B35"); r += 1
+        for label, val in summary_data.items():
+            _row(r, label, str(val)); r += 1
+
+    ws.column_dimensions["A"].width = 28
+    ws.column_dimensions["B"].width = 22
+    ws.column_dimensions["C"].width = 22
+    ws.column_dimensions["D"].width = 40
+
+
 def build_excel(
     ds: pd.DataFrame,
     dk: pd.DataFrame,
@@ -1022,110 +1176,134 @@ def build_excel(
 ) -> bytes:
     wb = Workbook()
 
-    # Sheet 1 — Vendas Tratada
-    ws1 = wb.active
-    ws1.title = "Vendas Tratada"
-    _write_sheet(ws1, ds, "PLANILHA DE VENDAS — TRATADA", "FF6B35",
-                 ["Tel_Limpo_Vendas", "Tel_8dig_Vendas"])
+    total_traffic = int((df_full["É_Tráfego"] == "SIM").sum()) if "É_Tráfego" in df_full.columns else 0
+    total_sales   = len(ds)
+    confirmed     = len(df_result)
+    conv_rate     = f"{confirmed/total_traffic*100:.1f}%" if total_traffic > 0 else "—"
 
-    # Sheet 2 — Kommo Tratada
-    ws2 = wb.create_sheet("Kommo Tratada")
-    _write_sheet(ws2, dk, "PLANILHA KOMMO — TRATADA", "2980B9",
-                 ["Tel_Limpo_Kommo", "Tel_8dig_Kommo"])
-
-    # Sheet 3 — Resultado PROCV (só tráfego com venda)
-    ws3 = wb.create_sheet("Resultado PROCV")
-    if len(df_result) == 0:
-        ws3.cell(1, 1, "Nenhum lead de tráfego com venda confirmada encontrado.")
-        ws3.cell(1, 1).font = Font(italic=True, color="888888")
-    else:
-        _write_sheet(ws3, df_result,
-                     "LEADS DE TRÁFEGO COM VENDA CONFIRMADA ✅", "27AE60")
-
-    # Sheet 4 — Kommo Completo com PROCV (todas as linhas, filtrável)
-    ws4 = wb.create_sheet("Kommo Completo + PROCV")
-    _write_sheet(ws4, df_full,
-                 "KOMMO COMPLETO — TODAS AS LINHAS (USE O FILTRO)", "6C3483")
-
-    # Sheet 5 — Duplicatas (opcional)
-    all_sheets = [ws1, ws2, ws3, ws4]
-    if df_dup_analysis is not None and "Situacao_Venda" in df_dup_analysis.columns:
-        df_non_unique = df_dup_analysis[df_dup_analysis["Situacao_Venda"] != "Única"]
-        if len(df_non_unique) > 0:
-            ws_dup = wb.create_sheet("Duplicatas e Multi-compras")
-            n_dup = int((df_dup_analysis["Situacao_Venda"].str.startswith("DUPLICATA")).sum())
-            n_multi = int((df_dup_analysis["Situacao_Venda"].str.startswith("Multi")).sum())
-            _write_sheet(
-                ws_dup, df_non_unique,
-                f"DUPLICATAS ({n_dup}) E MULTI-COMPRAS ({n_multi}) — ANÁLISE DETALHADA",
-                "922B21",
-                ["Situacao_Venda"],
-            )
-            all_sheets.append(ws_dup)
-
-    # Sheet 6 — Resultado Disparo (opcional)
+    # Prepara resumo para a aba guia
+    guide_summary = {
+        "Vendas carregadas": total_sales,
+        "Leads no Kommo": len(dk),
+        "Leads de tráfego": total_traffic,
+        "Conversões de tráfego": confirmed,
+        "Taxa de conversão (tráfego)": conv_rate,
+    }
     if df_disparo_result is not None and len(df_disparo_result) > 0:
-        ws_disp = wb.create_sheet("Resultado Disparo")
-        disp_confirmed = int((df_disparo_result["Venda_Confirmada"] == "SIM").sum())
-        _write_sheet(
-            ws_disp, df_disparo_result,
-            f"DISPARO — {disp_confirmed} CONVERSÕES CONFIRMADAS",
-            "8E44AD",
-            ["Data_Disparo", "Data_Venda", "Dias_Após_Disparo"],
-        )
-        all_sheets.append(ws_disp)
+        d_conv = int((df_disparo_result["Venda_Confirmada"] == "SIM").sum())
+        d_tot  = len(df_disparo_result)
+        guide_summary["Conversões de disparo"] = d_conv
+        guide_summary["Taxa de conversão (disparo)"] = f"{d_conv/d_tot*100:.1f}%" if d_tot > 0 else "—"
 
-    # Sheet Resumo
-    ws_res = wb.create_sheet("Resumo")
-    all_sheets.append(ws_res)
-    total_traffic = int((df_full["É_Tráfego"] == "SIM").sum())
-    total_sales = len(ds)
-    confirmed = len(df_result)
-    conv_rate = f"{confirmed/total_traffic*100:.1f}%" if total_traffic > 0 else "—"
+    # ── Aba 1: Como Ler (primeira aba — lida antes de tudo) ───────────
+    ws_guide = wb.active
+    ws_guide.title = "📋 Como Ler"
+    _write_guide_sheet(ws_guide, guide_summary)
 
+    # ── Aba 2: Resumo ─────────────────────────────────────────────────
+    ws_res = wb.create_sheet("📊 Resumo")
     ws_res.merge_cells("A1:C1")
     t = ws_res.cell(1, 1, "RESUMO DO PROC-BULLS")
     t.font = Font(color="FFFFFF", bold=True, size=14)
-    t.fill = PatternFill("solid", fgColor="FF6B35")
+    t.fill = PatternFill("solid", fgColor="7B2FBE")
     t.alignment = Alignment(horizontal="center", vertical="center")
     ws_res.row_dimensions[1].height = 36
 
     summary_rows = [
-        ("Total de vendas carregadas", total_sales),
-        ("Total de leads no Kommo", len(dk)),
+        ("Vendas carregadas", total_sales),
+        ("Leads no Kommo", len(dk)),
+        ("— TRÁFEGO —", ""),
         ("Leads com tag de tráfego", total_traffic),
-        ("Conversões confirmadas (tráfego → venda)", confirmed),
-        ("Taxa de conversão do tráfego", conv_rate),
+        ("Conversões confirmadas", confirmed),
+        ("Taxa de conversão", conv_rate),
     ]
     if df_disparo_result is not None and len(df_disparo_result) > 0:
-        disp_total = len(df_disparo_result)
-        disp_conv = int((df_disparo_result["Venda_Confirmada"] == "SIM").sum())
-        disp_rate = f"{disp_conv/disp_total*100:.1f}%" if disp_total > 0 else "—"
+        d_tot  = len(df_disparo_result)
+        d_conv = int((df_disparo_result["Venda_Confirmada"] == "SIM").sum())
+        d_rate = f"{d_conv/d_tot*100:.1f}%" if d_tot > 0 else "—"
         summary_rows += [
             ("— DISPARO —", ""),
-            ("Total de disparos analisados", disp_total),
-            ("Conversões confirmadas (disparo → venda)", disp_conv),
-            ("Taxa de conversão do disparo", disp_rate),
+            ("Leads de disparo analisados", d_tot),
+            ("Conversões confirmadas", d_conv),
+            ("Taxa de conversão", d_rate),
         ]
     if df_dup_analysis is not None and "Situacao_Venda" in df_dup_analysis.columns:
-        n_dup = int((df_dup_analysis["Situacao_Venda"].str.startswith("DUPLICATA")).sum())
+        n_dup   = int((df_dup_analysis["Situacao_Venda"].str.startswith("DUPLICATA")).sum())
         n_multi = int((df_dup_analysis["Situacao_Venda"].str.startswith("Multi")).sum())
         summary_rows += [
-            ("— DUPLICATAS —", ""),
-            ("Registros duplicados suspeitos", n_dup),
-            ("Multi-compras (mesma pessoa)", n_multi),
+            ("— QUALIDADE DOS DADOS —", ""),
+            ("Duplicatas suspeitas", n_dup),
+            ("Multi-compras (cliente recorrente)", n_multi),
         ]
-
     for i, (label, val) in enumerate(summary_rows, 2):
-        ws_res.cell(i, 1, label).font = Font(bold=True, size=11)
-        c = ws_res.cell(i, 2, val)
-        c.font = Font(bold=True, size=13, color="FF6B35")
-        c.alignment = Alignment(horizontal="center")
+        lc = ws_res.cell(i, 1, label)
+        lc.font = Font(bold=True, size=11)
+        if str(label).startswith("—"):
+            lc.fill = PatternFill("solid", fgColor="7B2FBE")
+            lc.font = Font(bold=True, size=11, color="FFFFFF")
+        vc = ws_res.cell(i, 2, val)
+        vc.font = Font(bold=True, size=13, color="FF6B35")
+        vc.alignment = Alignment(horizontal="center")
         ws_res.row_dimensions[i].height = 26
-
     ws_res.column_dimensions["A"].width = 46
     ws_res.column_dimensions["B"].width = 22
 
+    # ── Aba 3: Vendas — Tráfego ───────────────────────────────────────
+    ws3 = wb.create_sheet("✅ Vendas — Tráfego")
+    if len(df_result) == 0:
+        ws3.cell(1, 1, "Nenhuma venda de tráfego confirmada.").font = Font(italic=True, color="888888")
+    else:
+        _write_sheet(ws3, _rename_result_cols(df_result),
+                     f"VENDAS DO TRÁFEGO PAGO — {confirmed} CONVERSÕES CONFIRMADAS", "27AE60")
+
+    # ── Aba 4: Vendas — Disparo ───────────────────────────────────────
+    all_sheets = [ws_guide, ws_res, ws3]
+    if df_disparo_result is not None and len(df_disparo_result) > 0:
+        ws_disp = wb.create_sheet("📣 Vendas — Disparo")
+        d_conv  = int((df_disparo_result["Venda_Confirmada"] == "SIM").sum())
+        _write_sheet(
+            ws_disp, _rename_result_cols(df_disparo_result),
+            f"VENDAS DO DISPARO — {d_conv} CONVERSÕES CONFIRMADAS",
+            "8E44AD",
+            ["Data do Disparo", "Data da Venda", "Dias após o Disparo"],
+        )
+        all_sheets.append(ws_disp)
+
+    # ── Aba 5: Duplicatas ─────────────────────────────────────────────
+    if df_dup_analysis is not None and "Situacao_Venda" in df_dup_analysis.columns:
+        df_non_unique = df_dup_analysis[df_dup_analysis["Situacao_Venda"] != "Única"]
+        if len(df_non_unique) > 0:
+            n_dup   = int((df_dup_analysis["Situacao_Venda"].str.startswith("DUPLICATA")).sum())
+            n_multi = int((df_dup_analysis["Situacao_Venda"].str.startswith("Multi")).sum())
+            ws_dup  = wb.create_sheet("🔍 Duplicatas")
+            _write_sheet(
+                ws_dup, _rename_result_cols(df_non_unique),
+                f"DUPLICATAS ({n_dup}) E MULTI-COMPRAS ({n_multi}) — VERIFIQUE",
+                "922B21", ["Situação do Registro"],
+            )
+            all_sheets.append(ws_dup)
+
+    # ── Aba 6: Todos os Leads ─────────────────────────────────────────
+    ws4 = wb.create_sheet("📋 Todos os Leads")
+    _write_sheet(ws4, _rename_result_cols(df_full),
+                 "TODOS OS LEADS DO KOMMO — FILTRE PELA COLUNA 'COMPROU?'", "6C3483")
+    all_sheets.append(ws4)
+
+    # ── Aba 7: Dados Brutos — Vendas ──────────────────────────────────
+    ws1 = wb.create_sheet("📦 Vendas (bruto)")
+    _write_sheet(ws1, _rename_result_cols(ds),
+                 "PLANILHA DE VENDAS PROCESSADA", "FF6B35",
+                 ["Tel. Limpo (Vendas)", "Tel. 8 dígitos (Vendas)"])
+    all_sheets.append(ws1)
+
+    # ── Aba 8: Dados Brutos — Kommo ───────────────────────────────────
+    ws2 = wb.create_sheet("🗂️ Kommo (bruto)")
+    _write_sheet(ws2, _rename_result_cols(dk),
+                 "PLANILHA KOMMO PROCESSADA", "2980B9",
+                 ["Tel. Limpo (Kommo)", "Tel. 8 dígitos (Kommo)"])
+    all_sheets.append(ws2)
+
+    # ── Rodapé em todas as abas ───────────────────────────────────────
     for ws in all_sheets:
         r = ws.max_row + 2
         ws.cell(r, 1, "Desenvolvido por João  ·  Proc-Bulls  ·  Aure Digital").font = Font(
