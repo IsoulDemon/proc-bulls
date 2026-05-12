@@ -1005,13 +1005,19 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                 )
 
             # ── Resultado Disparo ───────────────────────────────────────────────
-            if df_disparo_result is not None and len(df_disparo_result) > 0:
+            st.divider()
+            st.markdown('<div class="step-wrap"><div class="step-num">📣</div><div class="step-text">Resultado do Disparo</div></div>', unsafe_allow_html=True)
+
+            if not considerar_disparo:
+                st.caption("Análise de disparo desativada.")
+            elif df_disparo_result is None or len(df_disparo_result) == 0:
+                st.warning(f"Nenhum lead encontrado com a tag **\"{disparo_keyword}\"** no Kommo. Verifique a palavra-chave ou a coluna de tags selecionada.")
+            else:
                 disp_conv = int((df_disparo_result["Venda_Confirmada"] == "SIM").sum())
                 disp_total = len(df_disparo_result)
                 disp_rate = f"{disp_conv/disp_total*100:.1f}%" if disp_total > 0 else "—"
 
-                st.divider()
-                st.markdown('<div class="step-wrap"><div class="step-num">📣</div><div class="step-text">Resultado do Disparo</div></div>', unsafe_allow_html=True)
+            if df_disparo_result is not None and len(df_disparo_result) > 0:
                 dm1, dm2, dm3 = st.columns(3)
                 dm1.metric("Leads de disparo", f"{disp_total:,}")
                 dm2.metric("Conversões confirmadas", f"{disp_conv:,}")
