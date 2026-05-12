@@ -163,6 +163,50 @@ def detect_tag_col(df: pd.DataFrame) -> Optional[str]:
     return None
 
 
+def detect_value_col(df: pd.DataFrame) -> Optional[str]:
+    """Detecta coluna de valor monetário na planilha de vendas."""
+    kws = ["valor", "value", "total", "amount", "preco", "preço", "receita",
+           "ticket", "fatura", "price", "vl_", "vlr", "sale", "receita"]
+    def _is_numeric_col(col: str) -> bool:
+        sample = df[col].dropna().head(30)
+        if len(sample) == 0:
+            return False
+        hits = sample.apply(
+            lambda v: bool(re.match(r"^[\s\dR$.,]+$", str(v).strip())) and
+                      bool(re.search(r"\d", str(v)))
+        ).sum()
+        return int(hits) >= max(2, len(sample) * 0.5)
+    # Primeiro: por nome + conteúdo numérico
+    for col in df.columns:
+        if _match_keywords(col, kws) and _is_numeric_col(col):
+            return col
+    # Fallback: primeira coluna com conteúdo numérico (que não seja telefone)
+    phone_kws = ["tel", "cel", "fone", "phone", "whatsapp", "wpp", "numero", "número"]
+    for col in df.columns:
+        if _match_keywords(col, phone_kws):
+            continue
+        if _is_numeric_col(col):
+            return col
+    return None
+
+
+def parse_value(v) -> float:
+    """Converte string de valor monetário para float."""
+    if v is None or (isinstance(v, float) and np.isnan(v)):
+        return 0.0
+    s = str(v).strip()
+    s = re.sub(r"[R$\s]", "", s)
+    # Formato brasileiro: 1.234,56 → 1234.56
+    if re.match(r"^\d{1,3}(\.\d{3})*(,\d+)?$", s):
+        s = s.replace(".", "").replace(",", ".")
+    else:
+        s = s.replace(",", ".")
+    try:
+        return float(s)
+    except ValueError:
+        return 0.0
+
+
 # ── Carregamento de arquivo ────────────────────────────────────────────────────
 
 class _FileLike:
@@ -1078,6 +1122,7 @@ if df_sales_raw is not None and df_kommo_raw is not None:
     auto_sp = detect_phone_col(df_sales_raw)
     auto_kp = detect_phone_col(df_kommo_raw)
     auto_kt = detect_tag_col(df_kommo_raw)
+    auto_vl = detect_value_col(df_sales_raw)
 
     def _idx(df, col):
         cols = list(df.columns)
@@ -1114,6 +1159,18 @@ if df_sales_raw is not None and df_kommo_raw is not None:
             value="trafego",
             help="A busca é case-insensitive e parcial. Ex: 'trafego' encontra 'Lead Tráfego Pago'.",
         )
+
+    # Coluna de valor monetário
+    none_val = "(não usar)"
+    val_opts = [none_val] + list(df_sales_raw.columns)
+    val_default = val_opts.index(auto_vl) if auto_vl and auto_vl in val_opts else 0
+    sales_value_col_sel = st.selectbox(
+        "Coluna de **valor da venda** *(opcional — para somar receita nos resultados)*",
+        val_opts, index=val_default, key="sales_value_col",
+    )
+    sales_value_col = None if sales_value_col_sel == none_val else sales_value_col_sel
+    if auto_vl == sales_value_col:
+        st.caption("✨ Auto-detectado")
 
     # ── Configuração de Disparo ────────────────────────────────────────────────
     st.markdown("##### 📣 Disparo")
@@ -1234,8 +1291,19 @@ if df_sales_raw is not None and df_kommo_raw is not None:
             progress.progress(100, text="Concluído!")
             progress.empty()
 
+            # ── Calcula somas de valor ──────────────────────────────────────────
+            def _sum_result_value(df_res: pd.DataFrame) -> Optional[float]:
+                if not sales_value_col:
+                    return None
+                vcol = f"[Venda] {sales_value_col}"
+                if vcol not in df_res.columns:
+                    return None
+                return df_res[vcol].apply(parse_value).sum()
+
+            traffic_value = _sum_result_value(df_result) if confirmed > 0 else None
+
             # ── Métricas ───────────────────────────────────────────────────────
-            st.markdown('<div class="step-wrap"><div class="step-num">✓</div><div class="step-text">Resultados</div></div>', unsafe_allow_html=True)
+            st.markdown('<div class="step-wrap"><div class="step-num">✓</div><div class="step-text">Resultados — Tráfego</div></div>', unsafe_allow_html=True)
             total_traffic = int((df_full["É_Tráfego"] == "SIM").sum())
 
             m1, m2, m3, m4 = st.columns(4)
@@ -1247,6 +1315,11 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                 f"{confirmed:,}",
                 delta=f"{confirmed/total_traffic*100:.1f}% de conv." if total_traffic > 0 else None,
             )
+            if traffic_value is not None:
+                st.metric(
+                    "💰 Receita total — tráfego",
+                    f"R$ {traffic_value:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+                )
 
             st.divider()
 
@@ -1270,10 +1343,18 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                 disp_rate = f"{disp_conv/disp_total*100:.1f}%" if disp_total > 0 else "—"
 
             if df_disparo_result is not None and len(df_disparo_result) > 0:
+                disp_confirmed_df = df_disparo_result[df_disparo_result["Venda_Confirmada"] == "SIM"]
+                disp_value = _sum_result_value(disp_confirmed_df)
+
                 dm1, dm2, dm3 = st.columns(3)
                 dm1.metric("Leads de disparo", f"{disp_total:,}")
                 dm2.metric("Conversões confirmadas", f"{disp_conv:,}")
                 dm3.metric("Taxa de conversão", disp_rate)
+                if disp_value is not None:
+                    st.metric(
+                        "💰 Receita total — disparo",
+                        f"R$ {disp_value:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+                    )
 
                 if kommo_date_col and sales_date_col:
                     st.success(f"🎯 {disp_conv} conversões dentro da janela de 30 dias após o disparo.")
