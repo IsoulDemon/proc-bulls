@@ -380,6 +380,59 @@ def find_best_column_combo(
     return best if best[3] > 0 else None
 
 
+def find_best_disparo_combo(
+    df_sales: pd.DataFrame,
+    df_kommo: pd.DataFrame,
+    disparo_keyword: str,
+    kommo_tag_col: str,
+) -> Optional[tuple]:
+    """
+    Testa todas as combinações (sales_phone_col × kommo_phone_col) para leads de disparo.
+    Retorna (sales_phone_col, kommo_phone_col, n_conversoes) ou None.
+    """
+    disparo_mask = (
+        df_kommo[kommo_tag_col].fillna("").astype(str)
+        .str.lower()
+        .str.contains(disparo_keyword.lower(), regex=False)
+    )
+    df_disp = df_kommo[disparo_mask]
+    if len(df_disp) == 0:
+        return None
+
+    kommo_sets: dict = {}
+    for col in df_disp.columns:
+        cleaned = df_disp[col].apply(
+            lambda v: right8(clean_phone(str(v))) if pd.notna(v) else ""
+        )
+        valid = set(v for v in cleaned if v)
+        if len(valid) >= 2:
+            kommo_sets[col] = valid
+
+    if not kommo_sets:
+        return None
+
+    sales_sets: dict = {}
+    for col in df_sales.columns:
+        cleaned = df_sales[col].apply(
+            lambda v: right8(clean_phone(str(v))) if pd.notna(v) else ""
+        )
+        valid = set(v for v in cleaned if v)
+        if len(valid) >= 2:
+            sales_sets[col] = valid
+
+    if not sales_sets:
+        return None
+
+    best: tuple = (None, None, 0)
+    for k_col, k_keys in kommo_sets.items():
+        for s_col, s_set in sales_sets.items():
+            conv = len(k_keys & s_set)
+            if conv > best[2]:
+                best = (s_col, k_col, conv)
+
+    return best if best[2] > 0 else None
+
+
 # ── Utilitários de data ────────────────────────────────────────────────────────
 
 _MONTH_MAP = {
@@ -970,12 +1023,29 @@ if df_sales_raw is not None and df_kommo_raw is not None:
 
             progress.progress(70, text="Analisando disparo...")
             df_disparo_result = None
+            disparo_auto_combo = None
             if considerar_disparo and disparo_keyword.strip():
                 df_disparo_result = run_disparo(
                     df_sales_raw, sales_phone_col, sales_date_col,
                     df_kommo_raw, kommo_phone_col, kommo_tag_col,
                     disparo_keyword, kommo_date_col,
                 )
+                disp_conv_initial = 0
+                if df_disparo_result is not None and len(df_disparo_result) > 0:
+                    disp_conv_initial = int((df_disparo_result["Venda_Confirmada"] == "SIM").sum())
+                if disp_conv_initial == 0:
+                    progress.progress(78, text="Testando combinações de colunas para disparo...")
+                    best_disp = find_best_disparo_combo(
+                        df_sales_raw, df_kommo_raw, disparo_keyword, kommo_tag_col
+                    )
+                    if best_disp:
+                        s_col_d, k_col_d, _ = best_disp
+                        disparo_auto_combo = best_disp
+                        df_disparo_result = run_disparo(
+                            df_sales_raw, s_col_d, sales_date_col,
+                            df_kommo_raw, k_col_d, kommo_tag_col,
+                            disparo_keyword, kommo_date_col,
+                        )
 
             progress.progress(90, text="Gerando relatório Excel...")
             excel_bytes = build_excel(ds_t, dk_t, df_result, df_full, df_disparo_result)
@@ -1026,6 +1096,14 @@ if df_sales_raw is not None and df_kommo_raw is not None:
             elif df_disparo_result is None or len(df_disparo_result) == 0:
                 st.warning(f"Nenhum lead encontrado com a tag **\"{disparo_keyword}\"** no Kommo. Verifique a palavra-chave ou a coluna de tags selecionada.")
             else:
+                if disparo_auto_combo:
+                    s_col_d, k_col_d, n_d = disparo_auto_combo
+                    st.info(
+                        f"💡 Colunas originais não geraram matches para disparo. "
+                        f"A ferramenta encontrou **{n_d}** lead(s) usando:\n\n"
+                        f"- Telefone Vendas → **{s_col_d}**\n"
+                        f"- Telefone Kommo → **{k_col_d}**"
+                    )
                 disp_conv = int((df_disparo_result["Venda_Confirmada"] == "SIM").sum())
                 disp_total = len(df_disparo_result)
                 disp_rate = f"{disp_conv/disp_total*100:.1f}%" if disp_total > 0 else "—"
