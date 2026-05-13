@@ -373,53 +373,101 @@ def _load_csv_smart(uploaded) -> tuple[pd.DataFrame, int]:
     return pd.DataFrame(), 0
 
 
+def _score_sheet(df: pd.DataFrame) -> int:
+    """
+    Pontua uma aba como planilha de vendas (0-100).
+    Abas primárias têm: data, valor, telefone e poucos 'Unnamed'.
+    """
+    score = 0
+    if detect_date_col(df) is not None:
+        score += 35   # data é o sinal mais forte
+    if detect_value_col(df) is not None:
+        score += 30
+    if detect_phone_col(df) is not None:
+        score += 20
+    unnamed = sum(1 for c in df.columns if str(c).lower().startswith("unnamed"))
+    unnamed_ratio = unnamed / max(len(df.columns), 1)
+    if unnamed_ratio < 0.2:
+        score += 15
+    return score
+
+
+def _normalize_cols(df: pd.DataFrame) -> pd.DataFrame:
+    """Remove espaços e resolve colunas duplicadas."""
+    cols = [str(c).strip() for c in df.columns]
+    seen: dict = {}
+    clean = []
+    for c in cols:
+        if c in seen:
+            seen[c] += 1
+            clean.append(f"{c}_{seen[c]}")
+        else:
+            seen[c] = 0
+            clean.append(c)
+    df = df.copy()
+    df.columns = clean
+    return df
+
+
 def load_file_multisheet(
     uploaded, selected_sheets: list
 ) -> tuple[Optional[pd.DataFrame], dict]:
     """
-    Carrega uma ou mais abas. Retorna (df_combinado, {aba: linha_cabecalho}).
-    Para CSV, selected_sheets é ignorado.
+    Carrega uma ou mais abas inteligentemente.
+    Quando há múltiplas abas, pontua cada uma como planilha de vendas.
+    Abas primárias (score ≥ 50) vêm primeiro no DataFrame combinado — isso
+    garante que o lookup de telefone prefira linhas com data e valor.
+    CSV: selected_sheets ignorado.
     """
     name = uploaded.name.lower()
     sheet_info: dict = {}
-    dfs = []
+    scored_dfs: list = []   # (score, sheet_name, df, hrow)
 
     try:
         if name.endswith(".csv"):
             df, hrow = _load_csv_smart(uploaded)
             if len(df) > 0:
                 sheet_info["CSV"] = hrow
-                dfs.append(df)
+                scored_dfs.append((100, "CSV", df, hrow))
         elif name.endswith((".xlsx", ".xls", ".xlsm")):
             xls = _open_excel_file(uploaded)
             for sheet in selected_sheets:
                 df, hrow = _load_single_sheet(xls, sheet)
                 if len(df) > 0:
-                    if len(selected_sheets) > 1:
-                        df.insert(0, "_Planilha", sheet)
+                    score = _score_sheet(df)
                     sheet_info[sheet] = hrow
-                    dfs.append(df)
+                    scored_dfs.append((score, sheet, df, hrow))
     except Exception as e:
         st.error(f"Erro ao ler arquivo: {e}")
         return None, {}
 
-    if not dfs:
+    if not scored_dfs:
         return None, {}
 
-    combined = pd.concat(dfs, ignore_index=True)
+    # Ordena: abas primárias (maior score) primeiro
+    # Isso faz com que o lookup de telefone prefira linhas com data+valor
+    scored_dfs.sort(key=lambda x: x[0], reverse=True)
 
-    # Normaliza nomes de colunas: remove espaços extras e resolve duplicatas
-    cols = [str(c).strip() for c in combined.columns]
-    seen: dict = {}
-    clean_cols = []
-    for c in cols:
-        if c in seen:
-            seen[c] += 1
-            clean_cols.append(f"{c}_{seen[c]}")
+    dfs = []
+    primary_sheets = []
+    secondary_sheets = []
+    for score, sheet_name, df, hrow in scored_dfs:
+        if len(selected_sheets) > 1 or (len(scored_dfs) > 1):
+            df = df.copy()
+            df.insert(0, "_Planilha", sheet_name)
+            df.insert(1, "_Score_Aba", score)
+        if score >= 50:
+            primary_sheets.append(sheet_name)
         else:
-            seen[c] = 0
-            clean_cols.append(c)
-    combined.columns = clean_cols
+            secondary_sheets.append(sheet_name)
+        dfs.append(df)
+
+    combined = _normalize_cols(pd.concat(dfs, ignore_index=True))
+
+    # Aviso sobre abas secundárias (para uso na UI)
+    if secondary_sheets:
+        combined.attrs["secondary_sheets"] = secondary_sheets
+        combined.attrs["primary_sheets"] = primary_sheets
 
     return combined, sheet_info
 
@@ -446,13 +494,13 @@ def _is_doc_col(col_name: str) -> bool:
 def _build_extended_lookup(df: pd.DataFrame, ds_with_meta: pd.DataFrame) -> dict:
     """
     Constrói {right8_key: row_dict} varrendo TODAS as colunas de telefone de df.
-    Pula colunas de documentos (CPF/CNPJ/RG) para evitar colisões.
+    Pula colunas de documentos. Linhas de abas primárias (_Score_Aba >= 50)
+    têm prioridade — como o df já está ordenado por score (maior primeiro),
+    o primeiro match por chave sempre será da aba melhor.
     """
-    # Rastreia quais índices já foram adicionados (evita Bug 4: mesma linha sob 2 chaves)
-    added_idx: set = set()
     lookup: dict = {}
     for col in df.columns:
-        if _is_doc_col(col):
+        if _is_doc_col(col) or col.startswith("_"):
             continue
         col_data = df[col].dropna()
         if not _is_phone_col(col_data):
@@ -463,7 +511,6 @@ def _build_extended_lookup(df: pd.DataFrame, ds_with_meta: pd.DataFrame) -> dict
                 key = right8(cleaned)
                 if key and key not in lookup:
                     lookup[key] = ds_with_meta.loc[idx].to_dict()
-                    added_idx.add(idx)
     return lookup
 
 
@@ -1452,6 +1499,17 @@ with col_left:
                 for sheet, hrow in sales_info.items():
                     if hrow > 0:
                         st.info(f"📋 '{sheet}': cabeçalho detectado na linha {hrow + 1} — título(s) anteriores ignorados.")
+                # Aviso sobre abas primárias vs secundárias
+                sec = df_sales_raw.attrs.get("secondary_sheets", [])
+                pri = df_sales_raw.attrs.get("primary_sheets", [])
+                if sec:
+                    st.warning(
+                        f"🧠 **Análise inteligente de abas:** "
+                        f"A aba **'{', '.join(sec)}'** não tem estrutura completa de vendas "
+                        f"(sem coluna de data ou muitos campos sem nome). "
+                        f"Ela será usada apenas para cruzamento de telefones. "
+                        f"A análise principal (datas, valores, duplicatas) usa: **'{', '.join(pri)}'**."
+                    )
                 st.success(f"✅ {len(df_sales_raw):,} linhas · {len(df_sales_raw.columns)} colunas")
                 with st.expander("Prévia"):
                     st.dataframe(df_sales_raw.head(6), use_container_width=True)
@@ -1776,7 +1834,16 @@ if df_sales_raw is not None and df_kommo_raw is not None:
             rev_total = rev_total if rev_total > 0 else None
 
             progress.progress(80, text="Analisando duplicatas e multi-compras...")
-            df_dup_analysis = analyze_duplicates(df_sales_raw, sales_phone_col, sales_date_col)
+            # Duplicatas: só em abas primárias (score ≥ 50) para evitar falsos positivos
+            # de telefones que aparecem em abas de cadastro/auxiliares
+            df_for_dup = df_sales_raw
+            if "_Score_Aba" in df_sales_raw.columns:
+                df_primary = df_sales_raw[df_sales_raw["_Score_Aba"].apply(
+                    lambda v: int(float(str(v))) >= 50 if str(v).replace('.','').isdigit() else False
+                )]
+                if len(df_primary) >= 2:
+                    df_for_dup = df_primary
+            df_dup_analysis = analyze_duplicates(df_for_dup, sales_phone_col, sales_date_col)
 
             progress.progress(90, text="Gerando relatório Excel...")
             _tv_excel = (rev_t or 0) + (rev_o or 0) if rev_total else None
