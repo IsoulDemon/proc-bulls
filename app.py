@@ -1792,13 +1792,9 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                     lambda t: "Tráfego + Disparo" if t in overlap_phones else "Disparo"
                 )
 
-            rev_t = _sum_result_vcol(df_result, sales_value_col) or None
             disp_sim_df = None
-            rev_d = None
             if df_disparo_result is not None and len(df_disparo_result) > 0:
                 disp_sim_df = df_disparo_result[df_disparo_result["Venda_Confirmada"] == "SIM"]
-                rev_d = _sum_result_vcol(disp_sim_df, sales_value_col) or None
-            rev_total = (rev_t or 0) + (rev_d or 0) or None
 
             progress.progress(80, text="Analisando duplicatas e multi-compras...")
             # Duplicatas: só em abas primárias (score ≥ 50) para evitar falsos positivos
@@ -1866,7 +1862,45 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                 with st.expander(f"Prévia — {confirmed} vendas de tráfego"):
                     st.dataframe(df_result, use_container_width=True, height=260)
             else:
-                st.info("Nenhuma venda de tráfego encontrada. Verifique a palavra-chave da tag e a coluna de telefone.")
+                # ── Quando 0 tráfego: ajuda o usuário a entender o que existe ──
+                all_phone_matches = df_full[df_full["Venda_Confirmada"] == "SIM"]
+                n_any_match = len(all_phone_matches)
+
+                if n_any_match > 0:
+                    st.warning(
+                        f"Nenhuma venda encontrada com a tag **\"{traffic_keyword}\"**. "
+                        f"Porém, **{n_any_match} leads do Kommo têm telefone que bate com suas vendas** — "
+                        f"pode ser que a tag de tráfego use um nome diferente."
+                    )
+                    # Top tags no Kommo para o usuário identificar a tag certa
+                    top_tags = (
+                        df_kommo_raw[kommo_tag_col]
+                        .fillna("").astype(str)
+                        .str.split(",")
+                        .explode()
+                        .str.strip()
+                        .loc[lambda s: s != ""]
+                        .value_counts()
+                        .head(12)
+                    )
+                    if len(top_tags) > 0:
+                        with st.expander("💡 Tags mais usadas no Kommo — qual identifica o tráfego pago?"):
+                            st.caption("Cole uma dessas tags no campo 'Tag de tráfego' acima e rode novamente:")
+                            for tag, cnt in top_tags.items():
+                                st.markdown(f"• **{tag}** — {cnt:,} leads")
+
+                    with st.expander(f"📋 {n_any_match} leads com telefone encontrado nas vendas (sem filtro de tag)"):
+                        st.caption(
+                            "Esses leads do Kommo têm telefone que bate com uma venda. "
+                            "Veja a coluna 'Tag_Kommo' para identificar quais são do tráfego pago."
+                        )
+                        st.dataframe(all_phone_matches, use_container_width=True, height=300)
+                else:
+                    st.info(
+                        f"Nenhuma venda encontrada com a tag **\"{traffic_keyword}\"** e "
+                        f"nenhum telefone do Kommo bateu com as vendas. "
+                        f"Verifique se a coluna de telefone está correta nos dois arquivos."
+                    )
 
             # ── Disparo ────────────────────────────────────────────────────────
             if considerar_disparo and disparo_keyword.strip():
@@ -1874,7 +1908,23 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                 st.markdown('<div class="step-wrap"><div class="step-num">📣</div><div class="step-text">Disparo (WhatsApp)</div></div>', unsafe_allow_html=True)
 
                 if df_disparo_result is None or disp_total == 0:
-                    st.info(f"Nenhum lead com a tag \"{disparo_keyword}\" encontrado no Kommo.")
+                    # Sugere tags alternativas
+                    top_tags_d = (
+                        df_kommo_disp[kommo_disp_tag_col]
+                        .fillna("").astype(str)
+                        .str.split(",")
+                        .explode()
+                        .str.strip()
+                        .loc[lambda s: s != ""]
+                        .value_counts()
+                        .head(12)
+                    )
+                    st.warning(f"Nenhum lead com a tag **\"{disparo_keyword}\"** encontrado no Kommo.")
+                    if len(top_tags_d) > 0:
+                        with st.expander("💡 Tags disponíveis no Kommo"):
+                            st.caption("Cole uma dessas no campo 'Tag de disparo' acima:")
+                            for tag, cnt in top_tags_d.items():
+                                st.markdown(f"• **{tag}** — {cnt:,} leads")
                 elif disp_conv > 0:
                     taxa_d = f"{disp_conv/disp_total*100:.1f}%"
                     st.success(f"**{disp_conv} vendas** encontradas de disparo — {taxa_d} de conversão sobre {disp_total:,} leads disparados.")
@@ -1887,7 +1937,11 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                             use_container_width=True, height=260,
                         )
                 else:
-                    st.warning(f"Leads de disparo encontrados ({disp_total:,}), mas nenhuma venda confirmada dentro da janela de 30 dias após o disparo.")
+                    st.warning(
+                        f"**{disp_total:,} leads de disparo** encontrados, mas nenhuma venda confirmada. "
+                        f"Possíveis causas: as vendas ocorreram antes do disparo, fora da janela de 30 dias, "
+                        f"ou os telefones não bateram."
+                    )
 
             # ── Sobreposição ────────────────────────────────────────────────────
             if n_overlap > 0:
