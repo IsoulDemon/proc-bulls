@@ -406,7 +406,22 @@ def load_file_multisheet(
     if not dfs:
         return None, {}
 
-    return pd.concat(dfs, ignore_index=True), sheet_info
+    combined = pd.concat(dfs, ignore_index=True)
+
+    # Normaliza nomes de colunas: remove espaços extras e resolve duplicatas
+    cols = [str(c).strip() for c in combined.columns]
+    seen: dict = {}
+    clean_cols = []
+    for c in cols:
+        if c in seen:
+            seen[c] += 1
+            clean_cols.append(f"{c}_{seen[c]}")
+        else:
+            seen[c] = 0
+            clean_cols.append(c)
+    combined.columns = clean_cols
+
+    return combined, sheet_info
 
 
 # ── Lógica principal do PROCV ──────────────────────────────────────────────────
@@ -1775,147 +1790,104 @@ if df_sales_raw is not None and df_kommo_raw is not None:
             progress.progress(100, text="Concluído!")
             progress.empty()
 
-            # ── Métricas ───────────────────────────────────────────────────────
-            st.markdown('<div class="step-wrap"><div class="step-num">✓</div><div class="step-text">Resultados — Tráfego</div></div>', unsafe_allow_html=True)
             total_traffic = int((df_full["É_Tráfego"] == "SIM").sum())
-
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Vendas carregadas", f"{len(ds_t):,}")
-            m2.metric("Leads no Kommo", f"{len(dk_t):,}")
-            m3.metric("Leads de tráfego", f"{total_traffic:,}")
-            m4.metric(
-                "Conversões confirmadas",
-                f"{confirmed:,}",
-                delta=f"{confirmed/total_traffic*100:.1f}% de conv." if total_traffic > 0 else None,
-            )
-
-            st.divider()
-
-            if confirmed > 0:
-                st.success(f"🎉 {confirmed} leads de tráfego com venda confirmada!")
-                st.dataframe(df_result, use_container_width=True, height=280)
-            else:
-                st.warning("Nenhuma conversão de tráfego encontrada.")
-
-            # ── Resultado Disparo ───────────────────────────────────────────────
-            st.divider()
-            st.markdown('<div class="step-wrap"><div class="step-num">📣</div><div class="step-text">Resultado do Disparo</div></div>', unsafe_allow_html=True)
-
-            if not considerar_disparo:
-                st.caption("Análise de disparo desativada.")
-            elif df_disparo_result is None or len(df_disparo_result) == 0:
-                st.warning(f"Nenhum lead encontrado com a tag **\"{disparo_keyword}\"** no Kommo. Verifique a palavra-chave ou a coluna de tags selecionada.")
-            else:
-                # Após dedup por Tel_8dig em run_disparo, cada linha = 1 comprador único
-                disp_conv = int((df_disparo_result["Venda_Confirmada"] == "SIM").sum())
-                disp_total = len(df_disparo_result)
-                disp_rate = f"{disp_conv/disp_total*100:.1f}%" if disp_total > 0 else "—"
-
+            disp_conv  = 0
+            disp_total = 0
             if df_disparo_result is not None and len(df_disparo_result) > 0:
-                dm1, dm2, dm3 = st.columns(3)
-                dm1.metric("Leads de disparo", f"{disp_total:,}")
-                dm2.metric("Conversões confirmadas", f"{disp_conv:,}")
-                dm3.metric("Taxa de conversão", disp_rate)
+                disp_conv  = int((df_disparo_result["Venda_Confirmada"] == "SIM").sum())
+                disp_total = len(df_disparo_result)
 
-                if kommo_date_col and sales_date_col:
-                    st.success(f"🎯 {disp_conv} conversões dentro da janela de 30 dias após o disparo.")
-                    if disp_conv == 0:
-                        # Diagnóstico: mostra amostra de datas para ajudar o usuário a identificar o problema
-                        with st.expander("🔎 Diagnóstico — por que não encontrou conversões?"):
-                            sample_kommo = df_kommo_raw[
-                                df_kommo_raw[kommo_tag_col].fillna("").str.lower().str.contains(disparo_keyword.lower(), regex=False)
-                            ][kommo_date_col].dropna().head(5).tolist()
-                            sample_sales = df_sales_raw[sales_date_col].dropna().head(5).tolist()
-                            st.markdown(f"**Amostra de datas do Kommo ({kommo_date_col}):** `{sample_kommo}`")
-                            st.markdown(f"**Amostra de datas das vendas ({sales_date_col}):** `{sample_sales}`")
-                            st.caption("Se as datas aparecem mas as conversões são 0, verifique se o formato está sendo reconhecido e se as vendas realmente ocorreram APÓS o disparo.")
-                else:
-                    st.info("📅 Datas parciais ou ausentes — filtre pela coluna Data_Venda no Excel para analisar por competência.")
-
-                if disp_conv > 0:
-                    st.dataframe(
-                        df_disparo_result[df_disparo_result["Venda_Confirmada"] == "SIM"],
-                        use_container_width=True, height=250,
-                    )
-
-            # ── Receita & Atribuição ────────────────────────────────────────────
-            st.divider()
-            st.markdown('<div class="step-wrap"><div class="step-num">💰</div><div class="step-text">Receita Total</div></div>', unsafe_allow_html=True)
-
-            n_traf_puro  = len(trafego_phones - overlap_phones)
-            n_disp_puro  = len(disparo_phones - overlap_phones)
             n_overlap    = len(overlap_phones)
-            n_total_uniq = n_traf_puro + n_disp_puro + n_overlap
+            n_total_uniq = len(trafego_phones | disparo_phones)
 
-            rc1, rc2, rc3 = st.columns(3)
-            rc1.metric("Conversões — Tráfego", f"{confirmed:,}",
-                       help="Total de leads de tráfego que compraram.")
-            rc2.metric("Conversões — Disparo", f"{disp_conv:,}" if df_disparo_result is not None and len(df_disparo_result) > 0 else "—",
-                       help="Total de leads de disparo que compraram dentro de 30 dias.")
-            rc3.metric("Compradores únicos", f"{n_total_uniq:,}",
-                       help="Total sem dupla contagem. Quem aparece em tráfego E disparo é contado uma vez.")
+            # Qualidade dos dados de vendas
+            n_sales_total  = len(df_sales_raw)
+            phones_series  = df_sales_raw[sales_phone_col].apply(
+                lambda v: right8(clean_phone(str(v))) if pd.notna(v) else "")
+            n_sem_tel = int((phones_series == "").sum())
+            n_com_tel = n_sales_total - n_sem_tel
 
-            if rev_total is not None or rev_t is not None or rev_d is not None:
-                rv1, rv2, rv3 = st.columns(3)
-                rv1.metric("Receita — Tráfego", _brl(rev_t) if rev_t else "—",
-                           help="Soma dos valores de venda dos leads de tráfego confirmados.")
-                rv2.metric("Receita — Disparo", _brl(rev_d) if rev_d else "—",
-                           help="Soma dos valores de venda dos leads de disparo confirmados.")
-                rv3.metric("RECEITA TOTAL (sem dupla contagem)", _brl(rev_total) if rev_total else "—",
-                           help="Tráfego + Disparo, deduplificando quem aparece nos dois.")
+            # ── Resumo ─────────────────────────────────────────────────────────
+            st.markdown('<div class="step-wrap"><div class="step-num">✓</div><div class="step-text">Resultados</div></div>', unsafe_allow_html=True)
 
-            if n_overlap > 0:
-                st.info(
-                    f"**{n_overlap} comprador(es)** receberam tráfego pago **e** disparo. "
-                    f"Estão marcados como **'Tráfego + Disparo'** nas tabelas — contados **uma vez** no total."
+            r1, r2, r3, r4 = st.columns(4)
+            r1.metric("Vendas carregadas", f"{n_sales_total:,}")
+            r2.metric("Com telefone válido", f"{n_com_tel:,}",
+                      delta=f"{n_sem_tel:,} sem tel." if n_sem_tel > 0 else None,
+                      delta_color="off")
+            r3.metric("Leads no Kommo", f"{len(dk_t):,}")
+            r4.metric("Leads de tráfego no Kommo", f"{total_traffic:,}")
+
+            if n_sem_tel > 0:
+                pct = n_sem_tel / n_sales_total * 100
+                st.warning(
+                    f"⚠️ **{n_sem_tel} de {n_sales_total} vendas ({pct:.0f}%) não têm telefone preenchido** "
+                    f"e não podem ser cruzadas com o Kommo. Os resultados abaixo refletem apenas as {n_com_tel} vendas com telefone."
                 )
-                with st.expander(f"Ver os {n_overlap} com sobreposição"):
-                    ov_df = df_result[df_result["Origem"] == "Tráfego + Disparo"] if len(df_result) > 0 and "Origem" in df_result.columns else pd.DataFrame()
-                    if len(ov_df) > 0:
-                        st.dataframe(ov_df, use_container_width=True, height=200)
 
-            # ── Análise de Duplicatas ───────────────────────────────────────────
             st.divider()
-            st.markdown('<div class="step-wrap"><div class="step-num">🔍</div><div class="step-text">Duplicatas e Multi-compras</div></div>', unsafe_allow_html=True)
 
-            sit = df_dup_analysis["Situacao_Venda"]
-            n_unica   = int((sit == "Única").sum())
-            n_multi   = int(sit.str.startswith("Multi").sum())
-            n_dup     = int(sit.str.startswith("DUPLICATA").sum())
-            n_numeros = df_dup_analysis[sales_phone_col].apply(
-                lambda v: right8(clean_phone(str(v))) if pd.notna(v) else ""
-            ).replace("", pd.NA).dropna().nunique()
+            # ── Tráfego ────────────────────────────────────────────────────────
+            st.markdown('<div class="step-wrap"><div class="step-num">📊</div><div class="step-text">Tráfego Pago</div></div>', unsafe_allow_html=True)
+            if confirmed > 0:
+                taxa_t = f"{confirmed/total_traffic*100:.1f}%" if total_traffic > 0 else "—"
+                st.success(f"**{confirmed} vendas** encontradas de tráfego pago — {taxa_t} de conversão sobre {total_traffic:,} leads.")
+                st.caption("Veja a lista completa na aba **✅ Vendas — Tráfego** do Excel.")
+                with st.expander(f"Prévia — {confirmed} vendas de tráfego"):
+                    st.dataframe(df_result, use_container_width=True, height=260)
+            else:
+                st.info("Nenhuma venda de tráfego encontrada. Verifique a palavra-chave da tag e a coluna de telefone.")
 
-            da1, da2, da3, da4 = st.columns(4)
-            da1.metric("Números únicos", f"{n_numeros:,}")
-            da2.metric("Vendas únicas", f"{n_unica:,}")
-            da3.metric("Multi-compras", f"{n_multi:,}")
-            da4.metric("Duplicatas suspeitas", f"{n_dup:,}")
+            # ── Disparo ────────────────────────────────────────────────────────
+            if considerar_disparo and disparo_keyword.strip():
+                st.divider()
+                st.markdown('<div class="step-wrap"><div class="step-num">📣</div><div class="step-text">Disparo (WhatsApp)</div></div>', unsafe_allow_html=True)
+
+                if df_disparo_result is None or disp_total == 0:
+                    st.info(f"Nenhum lead com a tag \"{disparo_keyword}\" encontrado no Kommo.")
+                elif disp_conv > 0:
+                    taxa_d = f"{disp_conv/disp_total*100:.1f}%"
+                    st.success(f"**{disp_conv} vendas** encontradas de disparo — {taxa_d} de conversão sobre {disp_total:,} leads disparados.")
+                    if not (kommo_date_col or sales_date_col):
+                        st.caption("Sem datas configuradas — todos os matches de telefone foram incluídos. Filtre por Data_Venda no Excel.")
+                    st.caption("Veja a lista completa na aba **📣 Vendas — Disparo** do Excel.")
+                    with st.expander(f"Prévia — {disp_conv} vendas de disparo"):
+                        st.dataframe(
+                            df_disparo_result[df_disparo_result["Venda_Confirmada"] == "SIM"],
+                            use_container_width=True, height=260,
+                        )
+                else:
+                    st.warning(f"Leads de disparo encontrados ({disp_total:,}), mas nenhuma venda confirmada dentro da janela de 30 dias após o disparo.")
+
+            # ── Sobreposição ────────────────────────────────────────────────────
+            if n_overlap > 0:
+                st.divider()
+                st.info(
+                    f"🔀 **{n_overlap} comprador(es)** aparecem em tráfego **e** disparo. "
+                    f"Total único de compradores: **{n_total_uniq}**. "
+                    f"Detalhes na coluna **'Origem da Venda'** do Excel."
+                )
+
+            # ── Qualidade dos dados de vendas ───────────────────────────────────
+            st.divider()
+            st.markdown('<div class="step-wrap"><div class="step-num">🔍</div><div class="step-text">Qualidade dos Dados</div></div>', unsafe_allow_html=True)
+
+            sit      = df_dup_analysis["Situacao_Venda"]
+            n_dup    = int(sit.str.startswith("DUPLICATA").sum())
+            n_multi  = int(sit.str.startswith("Multi").sum())
+
+            qd1, qd2, qd3, qd4 = st.columns(4)
+            qd1.metric("Total de vendas", f"{n_sales_total:,}")
+            qd2.metric("Com telefone", f"{n_com_tel:,}")
+            qd3.metric("Sem telefone", f"{n_sem_tel:,}", delta_color="off")
+            qd4.metric("Duplicatas suspeitas", f"{n_dup:,}")
 
             if n_dup > 0:
-                st.error(
-                    f"⚠️ **{n_dup} registros duplicados** detectados — mesmo número, mesma data e conteúdo idêntico. "
-                    f"Provavelmente lançamentos duplicados no sistema. Confira na aba **Duplicatas e Multi-compras** do Excel."
-                )
-                with st.expander(f"Ver os {n_dup} registros duplicados"):
-                    st.dataframe(
-                        df_dup_analysis[sit.str.startswith("DUPLICATA")],
-                        use_container_width=True, height=220,
-                    )
-
+                st.error(f"⚠️ **{n_dup} registros duplicados** — mesmo número, data e conteúdo idêntico. Veja aba **🔍 Duplicatas** no Excel.")
             if n_multi > 0:
-                st.info(
-                    f"🔁 **{n_multi} multi-compras** identificadas — mesmo número com registros distintos "
-                    f"(datas ou valores diferentes), indicando compras reais de um cliente recorrente."
-                )
-                with st.expander(f"Ver as {n_multi} multi-compras"):
-                    st.dataframe(
-                        df_dup_analysis[sit.str.startswith("Multi")],
-                        use_container_width=True, height=220,
-                    )
-
+                st.caption(f"🔁 {n_multi} multi-compras identificadas (mesmo cliente, datas diferentes) — normal para clientes recorrentes. Ver aba 🔍 Duplicatas no Excel.")
             if n_dup == 0 and n_multi == 0:
-                st.success("Nenhum número de telefone duplicado encontrado nas vendas.")
+                st.success("Nenhuma duplicata detectada nos dados de vendas.")
 
             st.divider()
 
