@@ -577,11 +577,28 @@ def parse_date(value) -> Optional[datetime]:
     except (ValueError, OverflowError):
         pass
 
-    # Formatos padrão via pandas (DD/MM/YYYY, ISO, etc.)
-    try:
-        return pd.to_datetime(s, dayfirst=True).to_pydatetime()
-    except Exception:
-        pass
+    # Formato M/D/YY ou M/D/YYYY (americano, comum em exports de sistemas BR)
+    # Ex: "4/30/26 18:05" → April 30, 2026
+    m_us = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{2,4})(?:\s+\d{1,2}:\d{2})?$", s)
+    if m_us:
+        mo, dy, yr = int(m_us.group(1)), int(m_us.group(2)), int(m_us.group(3))
+        if yr < 100:
+            yr += 2000
+        # Se dia > 12, certamente é MM/DD; se mês > 12, é DD/MM
+        try:
+            if mo <= 12 and dy <= 31:
+                return datetime(yr, mo, dy)
+        except ValueError:
+            pass
+
+    # Formatos padrão via pandas — tenta dayfirst=False primeiro para M/D/YY
+    for dayfirst in (False, True):
+        try:
+            dt = pd.to_datetime(s, dayfirst=dayfirst)
+            if _is_real_datetime(dt):
+                return dt.to_pydatetime()
+        except Exception:
+            continue
 
     # "month_name/YY", "month_name/YYYY", "month_name YYYY" (ex: "abril/26", "março 2024")
     sn = _normalize(s)
