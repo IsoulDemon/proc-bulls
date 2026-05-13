@@ -1286,8 +1286,6 @@ def build_excel(
     df_full: pd.DataFrame,
     df_disparo_result: Optional[pd.DataFrame] = None,
     df_dup_analysis: Optional[pd.DataFrame] = None,
-    traffic_revenue: Optional[float] = None,
-    disparo_revenue: Optional[float] = None,
     sales_value_col: Optional[str] = None,
 ) -> bytes:
     wb = Workbook()
@@ -1305,17 +1303,11 @@ def build_excel(
         "Conversões de tráfego": confirmed,
         "Taxa de conversão (tráfego)": conv_rate,
     }
-    if traffic_revenue is not None:
-        guide_summary["Receita total (tráfego)"] = _brl(traffic_revenue)
     if df_disparo_result is not None and len(df_disparo_result) > 0:
         d_conv = int((df_disparo_result["Venda_Confirmada"] == "SIM").sum())
         d_tot  = len(df_disparo_result)
         guide_summary["Conversões de disparo"] = d_conv
         guide_summary["Taxa de conversão (disparo)"] = f"{d_conv/d_tot*100:.1f}%" if d_tot > 0 else "—"
-        if disparo_revenue is not None:
-            guide_summary["Receita total (disparo)"] = _brl(disparo_revenue)
-        if traffic_revenue is not None and disparo_revenue is not None:
-            guide_summary["Receita total combinada"] = _brl(traffic_revenue + disparo_revenue)
 
     # ── Aba 1: Como Ler (primeira aba — lida antes de tudo) ───────────
     ws_guide = wb.active
@@ -1338,9 +1330,8 @@ def build_excel(
         ("Leads com tag de tráfego", total_traffic),
         ("Conversões confirmadas", confirmed),
         ("Taxa de conversão", conv_rate),
+        ("→ Veja os valores na aba ✅ Vendas — Tráfego", ""),
     ]
-    if traffic_revenue is not None:
-        summary_rows.append(("Receita total — tráfego", _brl(traffic_revenue)))
     if df_disparo_result is not None and len(df_disparo_result) > 0:
         d_tot  = len(df_disparo_result)
         d_conv = int((df_disparo_result["Venda_Confirmada"] == "SIM").sum())
@@ -1350,11 +1341,8 @@ def build_excel(
             ("Leads de disparo analisados", d_tot),
             ("Conversões confirmadas", d_conv),
             ("Taxa de conversão", d_rate),
+            ("→ Veja os valores na aba 📣 Vendas — Disparo", ""),
         ]
-        if disparo_revenue is not None:
-            summary_rows.append(("Receita total — disparo", _brl(disparo_revenue)))
-    if traffic_revenue is not None and disparo_revenue is not None:
-        summary_rows.append(("— RECEITA TOTAL COMBINADA —", _brl(traffic_revenue + disparo_revenue)))
     if df_dup_analysis is not None and "Situacao_Venda" in df_dup_analysis.columns:
         n_dup   = int((df_dup_analysis["Situacao_Venda"].str.startswith("DUPLICATA")).sum())
         n_multi = int((df_dup_analysis["Situacao_Venda"].str.startswith("Multi")).sum())
@@ -1846,11 +1834,7 @@ if df_sales_raw is not None and df_kommo_raw is not None:
             df_dup_analysis = analyze_duplicates(df_for_dup, sales_phone_col, sales_date_col)
 
             progress.progress(90, text="Gerando relatório Excel...")
-            _tv_excel = (rev_t or 0) + (rev_o or 0) if rev_total else None
-            _dv_excel = rev_d if rev_d else None
-
             excel_bytes = build_excel(ds_t, dk_t, df_result, df_full, df_disparo_result, df_dup_analysis,
-                                       traffic_revenue=_tv_excel, disparo_revenue=_dv_excel,
                                        sales_value_col=sales_value_col)
             st.session_state["excel_bytes"] = excel_bytes
 
