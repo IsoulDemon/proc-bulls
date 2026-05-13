@@ -452,7 +452,7 @@ def load_file_multisheet(
     primary_sheets = []
     secondary_sheets = []
     for score, sheet_name, df, hrow in scored_dfs:
-        if len(selected_sheets) > 1 or (len(scored_dfs) > 1):
+        if len(scored_dfs) > 1:
             df = df.copy()
             df.insert(0, "_Planilha", sheet_name)
             df.insert(1, "_Score_Aba", score)
@@ -1245,6 +1245,16 @@ def _write_guide_sheet(ws, summary_data: dict):
     ws.column_dimensions["D"].width = 40
 
 
+def _sum_result_vcol(df_res: Optional[pd.DataFrame], value_col: Optional[str]) -> float:
+    """Soma [Venda] {value_col} no DataFrame de resultado. Retorna 0.0 se não disponível."""
+    if not value_col or df_res is None or len(df_res) == 0:
+        return 0.0
+    vcol = f"[Venda] {value_col}"
+    if vcol not in df_res.columns:
+        return 0.0
+    return float(df_res[vcol].apply(parse_value).sum())
+
+
 def _brl(value) -> str:
     """Formata float como R$ brasileiro."""
     try:
@@ -1782,53 +1792,22 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                     lambda t: "Tráfego + Disparo" if t in overlap_phones else "Disparo"
                 )
 
-            # ── Receita: soma direta da coluna de valor nos resultados ─────────
-            def _sum_vcol(df_res):
-                """Soma a coluna [Venda] {value_col} do resultado, 0 se não existir."""
-                if not sales_value_col or df_res is None or len(df_res) == 0:
-                    return 0.0
-                vcol = f"[Venda] {sales_value_col}"
-                if vcol not in df_res.columns:
-                    return 0.0
-                return float(df_res[vcol].apply(parse_value).sum())
-
-            rev_trafego = _sum_vcol(df_result)
-
+            rev_t = _sum_result_vcol(df_result, sales_value_col) or None
             disp_sim_df = None
-            rev_disparo = 0.0
+            rev_d = None
             if df_disparo_result is not None and len(df_disparo_result) > 0:
                 disp_sim_df = df_disparo_result[df_disparo_result["Venda_Confirmada"] == "SIM"]
-                rev_disparo = _sum_vcol(disp_sim_df)
-
-            # Total sem dupla contagem: une tráfego + disparo confirmados, dedup por Tel_8dig
-            frames = []
-            if len(df_result) > 0:
-                frames.append(df_result.assign(_origem="trafego"))
-            if disp_sim_df is not None and len(disp_sim_df) > 0:
-                frames.append(disp_sim_df.assign(_origem="disparo"))
-            if frames:
-                combined = pd.concat(frames, ignore_index=True)
-                # Dedup: se mesma compra aparece como tráfego e disparo, conta uma vez
-                if "Tel_8dig" in combined.columns:
-                    combined = combined.drop_duplicates(subset=["Tel_8dig"])
-                rev_total = _sum_vcol(combined.drop(columns=["_origem"], errors="ignore"))
-            else:
-                rev_total = 0.0
-
-            # Aliases para uso na seção de atribuição
-            rev_t = rev_trafego if rev_trafego > 0 else None
-            rev_d = rev_disparo if rev_disparo > 0 else None
-            rev_o = None  # não calculamos sobreposição separada mais
-            rev_total = rev_total if rev_total > 0 else None
+                rev_d = _sum_result_vcol(disp_sim_df, sales_value_col) or None
+            rev_total = (rev_t or 0) + (rev_d or 0) or None
 
             progress.progress(80, text="Analisando duplicatas e multi-compras...")
             # Duplicatas: só em abas primárias (score ≥ 50) para evitar falsos positivos
             # de telefones que aparecem em abas de cadastro/auxiliares
             df_for_dup = df_sales_raw
             if "_Score_Aba" in df_sales_raw.columns:
-                df_primary = df_sales_raw[df_sales_raw["_Score_Aba"].apply(
-                    lambda v: int(float(str(v))) >= 50 if str(v).replace('.','').isdigit() else False
-                )]
+                df_primary = df_sales_raw[
+                    pd.to_numeric(df_sales_raw["_Score_Aba"], errors="coerce").fillna(0) >= 50
+                ]
                 if len(df_primary) >= 2:
                     df_for_dup = df_primary
             df_dup_analysis = analyze_duplicates(df_for_dup, sales_phone_col, sales_date_col)
