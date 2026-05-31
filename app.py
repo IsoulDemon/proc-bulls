@@ -1,5 +1,5 @@
 """
-Proc-Bulls — Ferramenta de PROCV Inteligente
+Proc Aure — Ferramenta de PROCV Inteligente
 Desenvolvido por João · Aure Digital
 """
 
@@ -18,55 +18,145 @@ from openpyxl.utils import get_column_letter
 
 # ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Proc-Bulls",
-    page_icon="🎯",
+    page_title="Proc Aure",
+    page_icon="✨",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
 # ── CSS ────────────────────────────────────────────────────────────────────────
-st.markdown(
-    "<style>"
-    "@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');"
-    "html,body,.stApp,.stMarkdown,p,h1,h2,h3,h4,h5,h6,li,label,button,input,textarea,select,.stButton,.stTextInput,.stSelectbox,.stMultiSelect,.stMetric{font-family:'Inter',-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif!important;-webkit-font-smoothing:antialiased!important}"
-    ".stApp{background:#000!important}"
-    ".main .block-container{padding-top:1.5rem!important;padding-bottom:6rem!important;max-width:1100px!important}"
-    ".hero-wrap{text-align:center;padding:2rem 0 0.5rem}"
-    ".hero-badge{display:inline-block;font-size:.68rem;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:rgba(191,90,242,.8);border:1px solid rgba(191,90,242,.25);border-radius:999px;padding:.3rem .9rem;margin-bottom:1rem;background:rgba(191,90,242,.07)}"
-    ".hero-title{font-size:3.8rem;font-weight:800;letter-spacing:-.04em;line-height:1;margin-bottom:.75rem;background:linear-gradient(135deg,#E879F9 0%,#BF5AF2 50%,#9D4EDD 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}"
-    ".hero-subtitle{color:rgba(235,235,245,.45);font-size:.92rem;font-weight:400;letter-spacing:.01em}"
-    ".step-wrap{display:flex;align-items:center;gap:12px;margin:2rem 0 1.2rem}"
-    ".step-num{width:28px;height:28px;border-radius:50%;flex-shrink:0;background:linear-gradient(135deg,#BF5AF2,#7B2FBE);color:#fff;font-size:.75rem;font-weight:700;display:flex;align-items:center;justify-content:center;box-shadow:0 0 16px rgba(191,90,242,.45)}"
-    ".step-text{font-size:1.05rem;font-weight:600;color:#F5F5F7;letter-spacing:-.01em}"
-    "[data-testid='stFileUploader']{border:1.5px dashed rgba(191,90,242,.35)!important;border-radius:16px!important;background:rgba(191,90,242,.04)!important;transition:all .25s ease!important}"
-    "[data-testid='stFileUploader']:hover{border-color:rgba(191,90,242,.65)!important;background:rgba(191,90,242,.08)!important}"
-    "[data-testid='stFileUploadDropzone']{border:none!important;background:transparent!important}"
-    "[data-testid='stButton']>button{background:linear-gradient(135deg,#BF5AF2 0%,#9D4EDD 100%)!important;color:#fff!important;border:none!important;border-radius:14px!important;font-weight:600!important;font-size:1rem!important;letter-spacing:.01em!important;padding:.75rem 1.5rem!important;box-shadow:0 4px 24px rgba(191,90,242,.3)!important;transition:all .22s ease!important}"
-    "[data-testid='stButton']>button:hover{transform:translateY(-2px)!important;box-shadow:0 10px 36px rgba(191,90,242,.5)!important}"
-    "[data-testid='stButton']>button:active{transform:translateY(0px)!important}"
-    "[data-testid='stDownloadButton']>button{background:linear-gradient(135deg,#30D158 0%,#1DA844 100%)!important;color:#fff!important;border:none!important;border-radius:14px!important;font-weight:600!important;font-size:1rem!important;width:100%!important;padding:.8rem!important;box-shadow:0 4px 20px rgba(48,209,88,.25)!important;transition:all .22s ease!important}"
-    "[data-testid='stDownloadButton']>button:hover{transform:translateY(-2px)!important;box-shadow:0 10px 32px rgba(48,209,88,.4)!important}"
-    "[data-testid='stMetric']{background:rgba(255,255,255,.04)!important;border:1px solid rgba(255,255,255,.08)!important;border-radius:16px!important;padding:1.2rem 1.4rem!important;transition:all .2s ease!important}"
-    "[data-testid='stMetric']:hover{background:rgba(255,255,255,.06)!important;border-color:rgba(191,90,242,.3)!important}"
-    "[data-testid='stMetricLabel']{font-size:.72rem!important;font-weight:600!important;text-transform:uppercase!important;letter-spacing:.08em!important;color:rgba(235,235,245,.45)!important}"
-    "[data-testid='stMetricValue']{font-size:2rem!important;font-weight:700!important;letter-spacing:-.025em!important;color:#F5F5F7!important}"
-    "[data-testid='stMetricDelta']{font-size:.82rem!important;font-weight:500!important}"
-    "[data-testid='stProgressBar']>div{border-radius:6px!important;background:rgba(255,255,255,.08)!important;height:6px!important}"
-    "[data-testid='stProgressBar']>div>div{background:linear-gradient(90deg,#E879F9,#BF5AF2,#9D4EDD)!important;border-radius:6px!important}"
-    ".stSpinner>div{border-color:rgba(191,90,242,.15)!important;border-top-color:#BF5AF2!important}"
-    "[data-baseweb='select']>div{border-radius:10px!important;border-color:rgba(255,255,255,.12)!important;background:rgba(255,255,255,.05)!important;transition:border-color .2s!important}"
-    "[data-baseweb='select']>div:hover{border-color:rgba(191,90,242,.45)!important}"
-    "[data-baseweb='input']{border-radius:10px!important;background:rgba(255,255,255,.05)!important;border-color:rgba(255,255,255,.12)!important}"
-    "[data-baseweb='tag']{background:rgba(191,90,242,.18)!important;border:1px solid rgba(191,90,242,.3)!important;border-radius:6px!important}"
-    "[data-testid='stExpander']{border:1px solid rgba(255,255,255,.08)!important;border-radius:14px!important;overflow:hidden!important;background:rgba(255,255,255,.025)!important}"
-    "[data-testid='stNotification'],.stAlert{border-radius:12px!important;border-left:none!important}"
-    "[data-testid='stDataFrame']{border-radius:14px!important;overflow:hidden!important;border:1px solid rgba(255,255,255,.08)!important}"
-    "hr{border:none!important;border-top:1px solid rgba(255,255,255,.07)!important;margin:1.8rem 0!important}"
-    ".stCaption,[data-testid='stCaptionContainer']{color:rgba(235,235,245,.38)!important;font-size:.78rem!important}"
-    ".footer{text-align:center;color:rgba(235,235,245,.22);font-size:.75rem;letter-spacing:.04em;margin-top:4rem;padding-top:1.5rem;border-top:1px solid rgba(255,255,255,.06)}"
-    "</style>",
-    unsafe_allow_html=True,
-)
+st.markdown("""<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+
+:root{
+  --accent:#BF5AF2; --accent-2:#7C5CFF; --accent-3:#E879F9; --accent-green:#30D158;
+  --ink:#F5F5F7; --muted:rgba(235,235,245,.5); --muted-2:rgba(235,235,245,.34);
+  --glass:rgba(255,255,255,.045); --glass-bd:rgba(255,255,255,.1);
+  --ease:cubic-bezier(.16,1,.3,1); --ease-soft:cubic-bezier(.4,0,.2,1);
+}
+
+html,body,.stApp,.stMarkdown,p,h1,h2,h3,h4,h5,h6,li,label,button,input,textarea,select,
+.stButton,.stTextInput,.stSelectbox,.stMultiSelect,.stMetric{
+  font-family:'Inter',-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif!important;
+  -webkit-font-smoothing:antialiased!important;text-rendering:optimizeLegibility!important}
+
+/* ── Fundo aurora animado ─────────────────────────────────────────── */
+.stApp{background:#08070c!important}
+.stApp::before{
+  content:'';position:fixed;inset:-25%;z-index:0;pointer-events:none;
+  background:
+    radial-gradient(38% 38% at 18% 22%, rgba(191,90,242,.22), transparent 72%),
+    radial-gradient(34% 34% at 82% 14%, rgba(124,92,255,.20), transparent 72%),
+    radial-gradient(42% 42% at 68% 86%, rgba(232,121,249,.14), transparent 72%),
+    radial-gradient(30% 30% at 30% 78%, rgba(48,209,88,.06), transparent 72%);
+  filter:blur(48px);animation:aurora 24s var(--ease-soft) infinite alternate;}
+@keyframes aurora{
+  0%{transform:translate3d(0,0,0) scale(1) rotate(0deg)}
+  50%{transform:translate3d(2.5%,-2%,0) scale(1.1) rotate(2deg)}
+  100%{transform:translate3d(-2.5%,2.5%,0) scale(1.05) rotate(-2deg)}}
+
+.main .block-container{position:relative;z-index:1;padding-top:1.5rem!important;
+  padding-bottom:6rem!important;max-width:1080px!important}
+
+/* Scrollbar refinada */
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:rgba(191,90,242,.3);border-radius:9px;border:2px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:rgba(191,90,242,.55);background-clip:content-box}
+
+/* ── Animações de entrada ─────────────────────────────────────────── */
+@keyframes fadeUp{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:translateY(0)}}
+@keyframes shimmer{0%,100%{background-position:0% 50%}50%{background-position:100% 50%}}
+@keyframes floatGlow{0%,100%{opacity:.7}50%{opacity:1}}
+
+/* ── Hero ─────────────────────────────────────────────────────────── */
+.hero-wrap{text-align:center;padding:2.6rem 0 1rem;animation:fadeUp .9s var(--ease) both}
+.hero-badge{display:inline-flex;align-items:center;gap:.5rem;font-size:.66rem;font-weight:600;
+  letter-spacing:.2em;text-transform:uppercase;color:rgba(235,235,245,.72);
+  border:1px solid rgba(255,255,255,.13);border-radius:999px;padding:.42rem 1.05rem;margin-bottom:1.5rem;
+  background:rgba(255,255,255,.05);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  box-shadow:0 2px 20px rgba(0,0,0,.25)}
+.hero-badge::before{content:'';width:6px;height:6px;border-radius:50%;
+  background:var(--accent-3);box-shadow:0 0 10px var(--accent-3);animation:floatGlow 2.6s ease-in-out infinite}
+.hero-title{font-size:4.6rem;font-weight:800;letter-spacing:-.05em;line-height:.96;margin-bottom:1rem;
+  background:linear-gradient(115deg,#fff 0%,#F0D9FF 30%,#E879F9 52%,#BF5AF2 72%,#7C5CFF 100%);
+  background-size:220% 220%;-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
+  animation:shimmer 9s ease-in-out infinite;filter:drop-shadow(0 6px 40px rgba(191,90,242,.28))}
+.hero-subtitle{color:var(--muted);font-size:1.02rem;font-weight:400;letter-spacing:.005em}
+
+/* ── Passos ───────────────────────────────────────────────────────── */
+.step-wrap{display:flex;align-items:center;gap:14px;margin:2.6rem 0 1.4rem;animation:fadeUp .7s var(--ease) both}
+.step-num{width:32px;height:32px;border-radius:50%;flex-shrink:0;
+  background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#fff;font-size:.78rem;font-weight:700;
+  display:flex;align-items:center;justify-content:center;
+  box-shadow:0 0 0 1px rgba(255,255,255,.08),0 6px 22px rgba(124,92,255,.5)}
+.step-text{font-size:1.12rem;font-weight:600;color:var(--ink);letter-spacing:-.015em}
+
+/* ── Cartões de vidro (uploader, métrica, expander, dataframe) ──────── */
+[data-testid='stFileUploader']{border:1px solid var(--glass-bd)!important;border-radius:22px!important;
+  background:var(--glass)!important;backdrop-filter:blur(22px)!important;-webkit-backdrop-filter:blur(22px)!important;
+  transition:all .45s var(--ease)!important}
+[data-testid='stFileUploader']:hover{border-color:rgba(191,90,242,.5)!important;background:rgba(191,90,242,.07)!important;
+  transform:translateY(-3px)!important;box-shadow:0 18px 50px rgba(124,92,255,.18)!important}
+[data-testid='stFileUploadDropzone']{border:none!important;background:transparent!important}
+
+[data-testid='stMetric']{background:var(--glass)!important;border:1px solid var(--glass-bd)!important;
+  border-radius:20px!important;padding:1.3rem 1.5rem!important;backdrop-filter:blur(20px)!important;
+  -webkit-backdrop-filter:blur(20px)!important;transition:all .4s var(--ease)!important}
+[data-testid='stMetric']:hover{background:rgba(255,255,255,.07)!important;border-color:rgba(191,90,242,.35)!important;
+  transform:translateY(-3px)!important;box-shadow:0 18px 44px rgba(0,0,0,.32)!important}
+[data-testid='stMetricLabel']{font-size:.7rem!important;font-weight:600!important;text-transform:uppercase!important;
+  letter-spacing:.1em!important;color:var(--muted)!important}
+[data-testid='stMetricValue']{font-size:2.1rem!important;font-weight:700!important;letter-spacing:-.03em!important;color:var(--ink)!important}
+[data-testid='stMetricDelta']{font-size:.82rem!important;font-weight:500!important}
+
+[data-testid='stExpander']{border:1px solid var(--glass-bd)!important;border-radius:18px!important;overflow:hidden!important;
+  background:rgba(255,255,255,.03)!important;backdrop-filter:blur(18px)!important;-webkit-backdrop-filter:blur(18px)!important;
+  transition:all .35s var(--ease)!important}
+[data-testid='stExpander']:hover{border-color:rgba(191,90,242,.28)!important}
+[data-testid='stDataFrame']{border-radius:18px!important;overflow:hidden!important;border:1px solid var(--glass-bd)!important}
+
+/* ── Botões ───────────────────────────────────────────────────────── */
+[data-testid='stButton']>button{background:linear-gradient(135deg,var(--accent) 0%,var(--accent-2) 100%)!important;
+  color:#fff!important;border:none!important;border-radius:16px!important;font-weight:600!important;font-size:1rem!important;
+  letter-spacing:.01em!important;padding:.8rem 1.6rem!important;
+  box-shadow:0 8px 30px rgba(124,92,255,.38),inset 0 1px 0 rgba(255,255,255,.22)!important;
+  transition:all .38s var(--ease)!important}
+[data-testid='stButton']>button:hover{transform:translateY(-3px) scale(1.012)!important;
+  box-shadow:0 18px 52px rgba(124,92,255,.55),inset 0 1px 0 rgba(255,255,255,.28)!important}
+[data-testid='stButton']>button:active{transform:translateY(-1px) scale(.992)!important;transition:all .12s var(--ease)!important}
+[data-testid='stDownloadButton']>button{background:linear-gradient(135deg,var(--accent-green) 0%,#1DA844 100%)!important;
+  color:#fff!important;border:none!important;border-radius:16px!important;font-weight:600!important;font-size:1rem!important;
+  width:100%!important;padding:.9rem!important;
+  box-shadow:0 8px 28px rgba(48,209,88,.32),inset 0 1px 0 rgba(255,255,255,.22)!important;
+  transition:all .38s var(--ease)!important}
+[data-testid='stDownloadButton']>button:hover{transform:translateY(-3px) scale(1.008)!important;
+  box-shadow:0 18px 48px rgba(48,209,88,.5)!important}
+
+/* ── Inputs / selects / tags ──────────────────────────────────────── */
+[data-baseweb='select']>div{border-radius:13px!important;border-color:rgba(255,255,255,.12)!important;
+  background:rgba(255,255,255,.05)!important;backdrop-filter:blur(10px)!important;transition:all .3s var(--ease)!important}
+[data-baseweb='select']>div:hover{border-color:rgba(191,90,242,.5)!important;background:rgba(255,255,255,.07)!important}
+[data-baseweb='input']{border-radius:13px!important;background:rgba(255,255,255,.05)!important;border-color:rgba(255,255,255,.12)!important}
+[data-baseweb='tag']{background:rgba(191,90,242,.2)!important;border:1px solid rgba(191,90,242,.32)!important;border-radius:8px!important}
+
+/* ── Progress / spinner ───────────────────────────────────────────── */
+[data-testid='stProgressBar']>div{border-radius:8px!important;background:rgba(255,255,255,.07)!important;height:7px!important}
+[data-testid='stProgressBar']>div>div{background:linear-gradient(90deg,var(--accent-3),var(--accent),var(--accent-2))!important;
+  border-radius:8px!important;box-shadow:0 0 16px rgba(191,90,242,.5)!important}
+.stSpinner>div{border-color:rgba(191,90,242,.15)!important;border-top-color:var(--accent)!important}
+
+/* ── Alertas / divisor / caption ──────────────────────────────────── */
+[data-testid='stNotification'],.stAlert{border-radius:16px!important;border-left:none!important;
+  backdrop-filter:blur(16px)!important;-webkit-backdrop-filter:blur(16px)!important}
+hr{border:none!important;border-top:1px solid rgba(255,255,255,.07)!important;margin:2rem 0!important}
+.stCaption,[data-testid='stCaptionContainer']{color:var(--muted-2)!important;font-size:.78rem!important}
+
+/* ── Rodapé ───────────────────────────────────────────────────────── */
+.footer{text-align:center;color:rgba(235,235,245,.24);font-size:.76rem;letter-spacing:.05em;
+  margin-top:4.5rem;padding-top:1.6rem;border-top:1px solid rgba(255,255,255,.06)}
+.footer b{color:rgba(235,235,245,.5);font-weight:600}
+</style>""", unsafe_allow_html=True)
 
 
 # ── Funções de limpeza ─────────────────────────────────────────────────────────
@@ -84,17 +174,23 @@ def clean_phone(raw) -> str:
     if isinstance(raw, float):
         if np.isnan(raw):
             return ""
-        raw = str(int(raw))  # evita "11987654321.0"
+        raw = f"{raw:.0f}"  # evita "11987654321.0" e notação científica 6.6e+10
     raw = str(raw).strip()
     if raw.lower() in ("", "nan", "none", "-", "n/a", "#n/a"):
         return ""
 
-    # Trata "66999873776.0" — número do Excel lido como float string
-    if re.match(r"^\d+\.0+$", raw):
-        raw = str(int(float(raw)))
+    # Número lido como float/científico string: "66999873776.0", "6.6e+10".
+    # Só converte quando há '.'/'e' (senão preservaria zeros à esquerda à toa).
+    if re.search(r"[.eE]", raw) and re.fullmatch(r"\d+(\.\d+)?([eE][+-]?\d+)?", raw):
+        try:
+            f = float(raw)
+            if f == int(f):
+                raw = str(int(f))
+        except (ValueError, OverflowError):
+            pass
 
-    # Mantém só dígitos e +
-    digits = re.sub(r"[^\d+]", "", raw).lstrip("+")
+    # Só dígitos (descarta +, texto e símbolos — evita o lixo "66+10")
+    digits = re.sub(r"\D", "", raw)
 
     # Remove DDI 55 se número ficar muito longo
     if digits.startswith("55") and len(digits) > 11:
@@ -109,13 +205,143 @@ def clean_phone(raw) -> str:
 
 def right8(phone_clean: str) -> str:
     """Últimos 8 dígitos — padroniza números com/sem 9 e com/sem DDD.
-    Retorna '' se < 8 dígitos para evitar colisões com números curtos."""
+    Retorna '' se < 8 dígitos ou se for placeholder (todos os dígitos iguais)."""
     if not phone_clean:
         return ""
     digits = re.sub(r"\D", "", str(phone_clean))
     if len(digits) < 8:
         return ""  # Muito curto para ser telefone — descarta
-    return digits[-8:]
+    sub8 = digits[-8:]
+    if len(set(sub8)) <= 1:
+        return ""  # 00000000, 99999999… — placeholder, não é telefone real
+    return sub8
+
+
+# DDDs brasileiros oficiais — usado para separar telefone de CPF/CEP/ID.
+_VALID_DDDS = {str(d) for d in (
+    11, 12, 13, 14, 15, 16, 17, 18, 19,
+    21, 22, 24, 27, 28,
+    31, 32, 33, 34, 35, 37, 38,
+    41, 42, 43, 44, 45, 46, 47, 48, 49,
+    51, 53, 54, 55,
+    61, 62, 63, 64, 65, 66, 67, 68, 69,
+    71, 73, 74, 75, 77, 79,
+    81, 82, 83, 84, 85, 86, 87, 88, 89,
+    91, 92, 93, 94, 95, 96, 97, 98, 99,
+)}
+
+
+def _looks_like_phone(value) -> bool:
+    """True se o valor parece um telefone brasileiro real.
+    Rejeita datas, dígitos repetidos, CPF/CEP e comprimentos fora da faixa.
+    - 11 dígitos → celular: exige DDD válido + 3º dígito '9'
+    - 10 dígitos → fixo:    exige DDD válido
+    - 8-9 dígitos → telefone sem DDD (aceito, sinal mais fraco)
+    """
+    s = str(value).strip()
+    if not s:
+        return False
+    digits = clean_phone(value)
+    n = len(digits)
+    if n < 8 or n > 11:
+        return False
+    if len(set(digits[-8:])) <= 1:  # placeholder
+        return False
+    # Data disfarçada ("2024-01-15", "15/03/2024") não é telefone
+    if re.search(r"[/\-]", s) and parse_date(value) is not None:
+        return False
+    if n == 11:
+        return digits[:2] in _VALID_DDDS and digits[2] == "9"
+    if n == 10:
+        return digits[:2] in _VALID_DDDS
+    return True  # 8-9 dígitos
+
+
+def phone_key(raw) -> tuple[Optional[str], str]:
+    """Chave canônica de telefone: (ddd, sub8).
+    sub8 = 8 últimos dígitos (casa com/sem o 9 e com/sem DDD).
+    ddd  = 2 primeiros dígitos quando há 10-11 dígitos com DDD válido; senão None.
+    Retorna (None, '') para placeholders / números curtos demais."""
+    digits = clean_phone(raw)
+    sub8 = right8(digits)
+    if not sub8:
+        return (None, "")
+    ddd = None
+    if len(digits) in (10, 11):
+        cand = digits[:2]
+        if cand in _VALID_DDDS:
+            ddd = cand
+    return (ddd, sub8)
+
+
+def phone_group_key(raw) -> str:
+    """Chave de agrupamento de telefone para dedup: DDD+sub8 quando há DDD, senão sub8.
+    Mantém pessoas de DDDs diferentes em grupos diferentes."""
+    ddd, sub8 = phone_key(raw)
+    if not sub8:
+        return ""
+    return f"{ddd}{sub8}" if ddd else sub8
+
+
+def _row_ident(ddd: Optional[str], sub8: str, primary_raw="") -> str:
+    """Identidade do comprador (DDD+sub8) para dedup e sobreposição tráfego×disparo.
+    Usa a chave que de fato casou; se o match foi por nome (sem telefone), usa o telefone principal."""
+    if sub8:
+        return f"{ddd}{sub8}" if ddd else sub8
+    return phone_group_key(primary_raw)
+
+
+def phones_match(a: tuple, b: tuple) -> bool:
+    """True se duas chaves casam: sub8 igual E DDD compatível (igual ou ausente num lado).
+    É o que mata o falso match entre cidades diferentes — (11) x (21) com mesmo final."""
+    ddd_a, s_a = a
+    ddd_b, s_b = b
+    if not s_a or s_a != s_b:
+        return False
+    if ddd_a and ddd_b and ddd_a != ddd_b:
+        return False
+    return True
+
+
+def add_to_phone_lookup(lookup: dict, key: tuple, payload) -> None:
+    """Adiciona payload ao lookup {sub8: [(ddd, payload), ...]} preservando ordem de prioridade."""
+    ddd, sub8 = key
+    if not sub8:
+        return
+    lookup.setdefault(sub8, []).append((ddd, payload))
+
+
+def resolve_phone(lookup: dict, key: tuple):
+    """Retorna o payload com DDD compatível (prefere DDD exato; senão lado-ausente).
+    Entre candidatos de mesma compatibilidade, vence o primeiro inserido (maior prioridade)."""
+    ddd, sub8 = key
+    if not sub8:
+        return None
+    candidates = lookup.get(sub8)
+    if not candidates:
+        return None
+    if ddd:  # 1) DDD exato
+        for c_ddd, payload in candidates:
+            if c_ddd == ddd:
+                return payload
+    for c_ddd, payload in candidates:  # 2) lado sem DDD (compatível)
+        if c_ddd is None or ddd is None:
+            return payload
+    return None  # 3) só há DDDs diferentes — não casa
+
+
+def resolve_phone_all(lookup: dict, key: tuple) -> list:
+    """Todos os payloads com DDD compatível (DDD exato primeiro, depois lado-ausente).
+    Usado no disparo, onde um mesmo número pode ter várias vendas (multi-compra)."""
+    ddd, sub8 = key
+    if not sub8:
+        return []
+    candidates = lookup.get(sub8)
+    if not candidates:
+        return []
+    exact = [p for c_ddd, p in candidates if ddd and c_ddd == ddd]
+    loose = [p for c_ddd, p in candidates if c_ddd is None or ddd is None]
+    return exact + loose
 
 
 # ── Detecção automática de colunas ─────────────────────────────────────────────
@@ -125,6 +351,7 @@ def _match_keywords(col_name: str, keywords: list[str]) -> bool:
     return any(kw in c for kw in keywords)
 
 
+@st.cache_data(show_spinner=False)
 def detect_phone_col(df: pd.DataFrame) -> Optional[str]:
     """
     Detecta coluna de telefone por conteúdo (7+ dígitos) + bônus por nome.
@@ -136,15 +363,14 @@ def detect_phone_col(df: pd.DataFrame) -> Optional[str]:
         "phone_number", "nr_tel", "nro", "n_tel",
     ]
     skip_kws = ["data", "date", "valor", "preco", "preço", "total",
-                "cpf", "cnpj", "cep", "id", "código", "codigo"]
+                "cpf", "cnpj", "cep", "id", "código", "codigo",
+                "documento", "doc", "inscricao", "inscrição"]
 
     def _phone_hits(col: str) -> int:
         sample = df[col].dropna().astype(str).head(30)
         if len(sample) == 0:
             return 0
-        return int(sample.apply(
-            lambda x: bool(re.search(r"\d{7,}", re.sub(r"[\s\-\(\)\.+]", "", x)))
-        ).sum())
+        return int(sample.apply(_looks_like_phone).sum())
 
     candidates = []
     for col in df.columns:
@@ -163,6 +389,7 @@ def detect_phone_col(df: pd.DataFrame) -> Optional[str]:
     return max(candidates, key=lambda x: x[1])[0]
 
 
+@st.cache_data(show_spinner=False)
 def detect_tag_col(df: pd.DataFrame) -> Optional[str]:
     kws = ["tag", "etiqueta", "label", "categoria", "tipo", "fonte", "origem"]
     for col in df.columns:
@@ -171,6 +398,20 @@ def detect_tag_col(df: pd.DataFrame) -> Optional[str]:
     return None
 
 
+@st.cache_data(show_spinner=False)
+def detect_name_col(df: pd.DataFrame) -> Optional[str]:
+    kws = ["nome", "name", "cliente", "comprador", "titular", "razao", "razão", "social", "contato"]
+    skip_kws = ["telefone", "cel", "phone", "whatsapp", "wpp", "email",
+                "cidade", "estado", "produto", "tag", "etiqueta"]
+    for col in df.columns:
+        if _match_keywords(col, skip_kws):
+            continue
+        if _match_keywords(col, kws):
+            return col
+    return None
+
+
+@st.cache_data(show_spinner=False)
 def detect_value_col(df: pd.DataFrame) -> Optional[str]:
     """
     Detecta coluna de valor monetário por análise estatística — sem depender de keywords.
@@ -312,10 +553,25 @@ def get_excel_sheets(uploaded) -> list:
         return []
 
 
+def _looks_like_data_row(row) -> bool:
+    """True se a linha parece DADO (telefone/data/valor) e não rótulos de cabeçalho."""
+    non_null = [v for v in row if pd.notna(v) and str(v).strip().lower() not in ("", "nan")]
+    if not non_null:
+        return False
+    data_hits = sum(
+        1 for v in non_null
+        if _looks_like_phone(v)
+        or parse_date(v) is not None
+        or re.fullmatch(r"[\d\s\.\,\-\+\/R$%]+", str(v).strip()) is not None
+    )
+    return data_hits / len(non_null) >= 0.5
+
+
 def detect_header_row(df_raw: pd.DataFrame) -> int:
     """
     Varre as primeiras linhas e retorna o índice da linha que parece
     ser o cabeçalho real (ignora títulos e linhas em branco acima).
+    Retorna -1 quando a planilha NÃO tem cabeçalho (dados já na 1ª linha preenchida).
     """
     n_cols = len(df_raw.columns)
     min_filled = max(2, int(n_cols * 0.3))
@@ -330,17 +586,110 @@ def detect_header_row(df_raw: pd.DataFrame) -> int:
             if isinstance(v, str)
             and not re.fullmatch(r"[\d\s\.\,\-\+\/\%]+", v.strip())
         )
-        if label_count / len(non_null) >= 0.4:
+        # Rótulos suficientes E a linha não é dado disfarçado → é o cabeçalho
+        if label_count / len(non_null) >= 0.4 and not _looks_like_data_row(row):
             return i
+
+    # Nenhum cabeçalho claro: se a 1ª linha preenchida já é dado, é planilha SEM cabeçalho
+    for i in range(min(10, len(df_raw))):
+        row = df_raw.iloc[i]
+        non_null = [v for v in row if pd.notna(v) and str(v).strip() not in ("", "nan")]
+        if len(non_null) >= min_filled:
+            return -1 if _looks_like_data_row(row) else 0
     return 0
 
 
-def _load_single_sheet(xls, sheet_name: str) -> tuple[pd.DataFrame, int]:
-    df_raw = pd.read_excel(xls, sheet_name=sheet_name, header=None, dtype=str)
+def _is_blank_col(series: pd.Series) -> bool:
+    """True se a coluna está inteiramente vazia (NaN ou string vazia)."""
+    s = series.astype(str).str.strip().str.lower()
+    return bool(((series.isna()) | (s == "") | (s == "nan")).all())
+
+
+def _split_side_by_side_blocks(df_raw: pd.DataFrame) -> pd.DataFrame:
+    """
+    Detecta planilha dividida em blocos lado a lado (separados por coluna vazia)
+    e os reempilha verticalmente num só bloco. Conservador: só junta blocos de
+    MESMA largura, cada um com ao menos uma coluna de telefone. Senão, devolve igual.
+    Recebe e devolve o DataFrame bruto (header=None).
+    """
+    n = len(df_raw.columns)
+    if n < 4 or len(df_raw) < 2:
+        return df_raw
+
+    empty_cols = {i for i in range(n) if _is_blank_col(df_raw.iloc[:, i])}
+    if not empty_cols:
+        return df_raw
+
+    # Quebra em blocos contíguos de colunas não-vazias
+    blocks, cur = [], []
+    for i in range(n):
+        if i in empty_cols:
+            if cur:
+                blocks.append(cur); cur = []
+        else:
+            cur.append(i)
+    if cur:
+        blocks.append(cur)
+
+    if len(blocks) < 2 or len({len(b) for b in blocks}) != 1:
+        return df_raw  # menos de 2 blocos ou larguras diferentes → não é a mesma tabela
+
+    def _is_header_like(vals) -> bool:
+        nn = [v for v in vals if pd.notna(v) and str(v).strip().lower() not in ("", "nan")]
+        if not nn:
+            return False
+        labels = sum(1 for v in nn if not re.fullmatch(r"[\d\s\.\,\-\+\/R$%]+", str(v).strip()))
+        return labels / len(nn) >= 0.5
+
+    per_block_header = all(_is_header_like(df_raw.iloc[0, b].tolist()) for b in blocks)
+
+    sub_frames = []
+    for bi, b in enumerate(blocks):
+        sub = df_raw.iloc[:, b].reset_index(drop=True)
+        if not any(_is_phone_col(sub.iloc[:, j].dropna()) for j in range(sub.shape[1])):
+            return df_raw  # bloco sem telefone → não arrisca juntar tabelas diferentes
+        if per_block_header and bi > 0:
+            sub = sub.iloc[1:].reset_index(drop=True)  # remove cabeçalho repetido do bloco
+        sub.columns = range(sub.shape[1])
+        sub_frames.append(sub)
+
+    stacked = pd.concat(sub_frames, ignore_index=True)
+    stacked.columns = range(stacked.shape[1])
+    stacked.attrs["blocks_merged"] = len(blocks)
+    return stacked
+
+
+def _frame_from_raw(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, int, list]:
+    """
+    Recebe o DataFrame bruto (lido com header=None) e devolve (df tratado, hrow, notas).
+    Trata: blocos lado a lado, detecção de cabeçalho e planilha sem cabeçalho.
+    """
+    notes: list = []
+    df_raw = _split_side_by_side_blocks(df_raw)
+    blocks_merged = df_raw.attrs.get("blocks_merged", 0)
+    if blocks_merged:
+        notes.append(f"Aba dividida em {blocks_merged} blocos lado a lado — reempilhados num só.")
+
     hrow = detect_header_row(df_raw)
-    df = pd.read_excel(xls, sheet_name=sheet_name, header=hrow, dtype=str)
+    if hrow == -1:
+        df = df_raw.copy()
+        df.columns = [f"Coluna {i + 1}" for i in range(len(df.columns))]
+        notes.append("Planilha sem cabeçalho — colunas nomeadas como Coluna 1, 2, 3…")
+    else:
+        header_vals = df_raw.iloc[hrow].tolist()
+        df = df_raw.iloc[hrow + 1:].copy()
+        df.columns = [
+            str(v).strip() if pd.notna(v) and str(v).strip().lower() not in ("", "nan")
+            else f"Coluna {i + 1}"
+            for i, v in enumerate(header_vals)
+        ]
     df = df.dropna(how="all").reset_index(drop=True)
-    return df, hrow
+    return df, hrow, notes
+
+
+def _load_single_sheet(xls, sheet_name: str) -> tuple[pd.DataFrame, int, list]:
+    df_raw = pd.read_excel(xls, sheet_name=sheet_name, header=None, dtype=str)
+    return _frame_from_raw(df_raw)
 
 
 def _open_excel_file(uploaded):
@@ -356,21 +705,28 @@ def _open_excel_file(uploaded):
     raise ValueError("Não foi possível abrir o arquivo Excel. Verifique se o arquivo não está corrompido.")
 
 
-def _load_csv_smart(uploaded) -> tuple[pd.DataFrame, int]:
-    for enc in ("utf-8", "latin-1", "cp1252", "iso-8859-1"):
+def _load_csv_smart(uploaded) -> tuple[pd.DataFrame, int, list]:
+    """Lê CSV detectando encoding E separador (vírgula, ponto-e-vírgula, tab, pipe)."""
+    uploaded.seek(0)
+    raw = uploaded.read()
+    if isinstance(raw, str):
+        raw = raw.encode("utf-8")
+    for enc in ("utf-8-sig", "utf-8", "latin-1", "cp1252", "iso-8859-1"):
         try:
-            uploaded.seek(0)
-            df_raw = pd.read_csv(uploaded, encoding=enc, header=None, dtype=str)
-            hrow = detect_header_row(df_raw)
-            uploaded.seek(0)
-            df = pd.read_csv(uploaded, encoding=enc, header=hrow, dtype=str)
-            df = df.dropna(how="all").reset_index(drop=True)
-            return df, hrow
-        except UnicodeDecodeError:
+            text = raw.decode(enc)
+        except (UnicodeDecodeError, LookupError):
             continue
+        # Detecta o separador pela 1ª linha não-vazia (mais frequente entre os candidatos)
+        first = next((ln for ln in text.splitlines() if ln.strip()), "")
+        delim = max((",", ";", "\t", "|"), key=first.count)
+        if first.count(delim) == 0:
+            delim = ","
+        try:
+            df_raw = pd.read_csv(io.StringIO(text), header=None, dtype=str, sep=delim)
+            return _frame_from_raw(df_raw)
         except Exception:
-            break
-    return pd.DataFrame(), 0
+            continue
+    return pd.DataFrame(), 0, []
 
 
 def _score_sheet(df: pd.DataFrame) -> int:
@@ -393,8 +749,8 @@ def _score_sheet(df: pd.DataFrame) -> int:
 
 
 def _normalize_cols(df: pd.DataFrame) -> pd.DataFrame:
-    """Remove espaços e resolve colunas duplicadas."""
-    cols = [str(c).strip() for c in df.columns]
+    """Apara pontas, colapsa espaços internos e resolve colunas duplicadas."""
+    cols = [re.sub(r"\s+", " ", str(c).strip()) for c in df.columns]
     seen: dict = {}
     clean = []
     for c in cols:
@@ -407,6 +763,38 @@ def _normalize_cols(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df.columns = clean
     return df
+
+
+def _canon_colname(c: str) -> str:
+    """Nome canônico de coluna: minúsculas, sem acento, espaços colapsados."""
+    return _normalize(re.sub(r"\s+", " ", str(c).strip()))
+
+
+def _align_columns(dfs: list) -> tuple[list, int]:
+    """
+    Renomeia colunas equivalentes (mesmo nome canônico) entre abas para o MESMO
+    rótulo, evitando que 'Telefone' e 'Telefone ' virem colunas separadas no concat.
+    Devolve (lista de DataFrames renomeados, nº de ajustes).
+    """
+    if len(dfs) < 2:
+        return dfs, 0
+    canon_to_display: dict = {}
+    for df in dfs:
+        for c in df.columns:
+            k = _canon_colname(c)
+            if k and k not in canon_to_display:
+                canon_to_display[k] = c
+    n_aligned = 0
+    out = []
+    for df in dfs:
+        rename = {}
+        for c in df.columns:
+            target = canon_to_display.get(_canon_colname(c), c)
+            if target != c and target not in df.columns:
+                rename[c] = target
+                n_aligned += 1
+        out.append(df.rename(columns=rename) if rename else df)
+    return out, n_aligned
 
 
 def load_file_multisheet(
@@ -422,21 +810,29 @@ def load_file_multisheet(
     name = uploaded.name.lower()
     sheet_info: dict = {}
     scored_dfs: list = []   # (score, sheet_name, df, hrow)
+    treatment_notes: list = []
 
     try:
         if name.endswith(".csv"):
-            df, hrow = _load_csv_smart(uploaded)
+            df, hrow, notes = _load_csv_smart(uploaded)
             if len(df) > 0:
+                df = _normalize_cols(df)
                 sheet_info["CSV"] = hrow
                 scored_dfs.append((100, "CSV", df, hrow))
+                treatment_notes.extend(notes)
         elif name.endswith((".xlsx", ".xls", ".xlsm")):
             xls = _open_excel_file(uploaded)
             for sheet in selected_sheets:
-                df, hrow = _load_single_sheet(xls, sheet)
+                df, hrow, notes = _load_single_sheet(xls, sheet)
                 if len(df) > 0:
+                    df = _normalize_cols(df)
                     score = _score_sheet(df)
                     sheet_info[sheet] = hrow
                     scored_dfs.append((score, sheet, df, hrow))
+                    treatment_notes.extend(
+                        (f"Aba '{sheet}': {n}" if len(selected_sheets) > 1 else n)
+                        for n in notes
+                    )
     except Exception as e:
         st.error(f"Erro ao ler arquivo: {e}")
         return None, {}
@@ -448,10 +844,18 @@ def load_file_multisheet(
     # Isso faz com que o lookup de telefone prefira linhas com data+valor
     scored_dfs.sort(key=lambda x: x[0], reverse=True)
 
+    # Alinha colunas equivalentes entre abas ANTES do concat (corrige fragmentação)
+    aligned_dfs, n_aligned = _align_columns([t[2] for t in scored_dfs])
+    if n_aligned > 0:
+        treatment_notes.append(
+            f"Colunas equivalentes entre abas foram unificadas ({n_aligned} ajuste(s)) — "
+            f"evita dados fragmentados (ex.: 'Telefone' e 'Telefone ')."
+        )
+
     dfs = []
     primary_sheets = []
     secondary_sheets = []
-    for score, sheet_name, df, hrow in scored_dfs:
+    for (score, sheet_name, _orig, hrow), df in zip(scored_dfs, aligned_dfs):
         if len(scored_dfs) > 1:
             df = df.copy()
             df.insert(0, "_Planilha", sheet_name)
@@ -464,10 +868,12 @@ def load_file_multisheet(
 
     combined = _normalize_cols(pd.concat(dfs, ignore_index=True))
 
-    # Aviso sobre abas secundárias (para uso na UI)
+    # Avisos para a UI
     if secondary_sheets:
         combined.attrs["secondary_sheets"] = secondary_sheets
         combined.attrs["primary_sheets"] = primary_sheets
+    if treatment_notes:
+        combined.attrs["treatment_notes"] = treatment_notes
 
     return combined, sheet_info
 
@@ -475,10 +881,12 @@ def load_file_multisheet(
 # ── Lógica principal do PROCV ──────────────────────────────────────────────────
 
 def _is_phone_col(col_data: pd.Series) -> bool:
-    """Retorna True se a coluna tem pelo menos 2 valores com 8+ dígitos após limpeza."""
+    """Retorna True se a coluna tem pelo menos 2 valores que parecem telefone real.
+    Amostra os primeiros 50 valores não-nulos — rápido e suficiente para classificar."""
     if len(col_data) == 0:
         return False
-    phone_like = int(col_data.apply(lambda v: len(clean_phone(str(v))) >= 8).sum())
+    sample = col_data.head(50)
+    phone_like = int(sample.apply(_looks_like_phone).sum())
     return phone_like >= 2
 
 
@@ -491,27 +899,81 @@ def _is_doc_col(col_name: str) -> bool:
     return any(kw in c for kw in _DOC_COLS)
 
 
-def _build_extended_lookup(df: pd.DataFrame, ds_with_meta: pd.DataFrame) -> dict:
+# Token de telefone BR embutido em texto: (DDI) (DDD) 9? XXXX(-)XXXX
+_PHONE_TOKEN_RE = re.compile(r"(?:\+?55[\s.\-]?)?\(?\d{2}\)?[\s.\-]?9?\d{4}[\s.\-]?\d{4}")
+
+
+def _phone_keys_in_cell(raw, strict: bool = False) -> list:
     """
-    Constrói {right8_key: row_dict} varrendo TODAS as colunas de telefone de df.
-    Pula colunas de documentos. Linhas de abas primárias (_Score_Aba >= 50)
-    têm prioridade — como o df já está ordenado por score (maior primeiro),
-    o primeiro match por chave sempre será da aba melhor.
+    Todas as chaves (ddd, sub8) de telefone presentes numa célula — trata vários
+    números separados por /, ; , etc. e números embutidos em texto.
+    strict=True exige que cada token pareça telefone real (varredura de soltos).
+    """
+    s = str(raw)
+    if not s or s.strip().lower() in ("nan", "none", ""):
+        return []
+    keys, seen = [], set()
+    for tok in _PHONE_TOKEN_RE.findall(s):
+        if strict and not _looks_like_phone(tok):
+            continue
+        k = phone_key(tok)
+        if k[1] and k[1] not in seen:
+            keys.append(k)
+            seen.add(k[1])
+    if not keys and not strict:  # nenhum token reconhecido — tenta a célula inteira
+        k = phone_key(s)
+        if k[1]:
+            keys.append(k)
+    return keys
+
+
+def _build_extended_lookup(
+    df: pd.DataFrame, ds_with_meta: pd.DataFrame
+) -> tuple[dict, dict, int]:
+    """
+    Retorna (lookup, lookup_source, n_stray):
+      lookup        → {sub8: [(ddd, row_dict), ...]}  — DDD-aware; ordem = prioridade
+      lookup_source → {sub8: nome_da_coluna_que_gerou_a_chave}
+      n_stray       → nº de telefones soltos achados FORA das colunas de telefone
+    Colunas de telefone primeiro (prioridade); depois varredura célula-a-célula de
+    telefones soltos. Pula colunas de documento. Abas primárias têm prioridade (df já ordenado).
     """
     lookup: dict = {}
+    lookup_source: dict = {}
+    rows_dict = ds_with_meta.to_dict("index")  # pré-computa uma vez
+
+    phone_cols = []
     for col in df.columns:
-        if _is_doc_col(col) or col.startswith("_"):
+        if _is_doc_col(col) or str(col).startswith("_"):
             continue
         col_data = df[col].dropna()
         if not _is_phone_col(col_data):
             continue
-        for idx in col_data.index:
-            cleaned = clean_phone(str(df.at[idx, col]))
-            if len(cleaned) >= 8:
-                key = right8(cleaned)
-                if key and key not in lookup:
-                    lookup[key] = ds_with_meta.loc[idx].to_dict()
-    return lookup
+        phone_cols.append(col)
+        for idx, raw in col_data.items():
+            for key in _phone_keys_in_cell(raw):
+                add_to_phone_lookup(lookup, key, rows_dict[idx])
+                lookup_source.setdefault(key[1], col)
+
+    # ── Varredura de telefones soltos (número fora da coluna de telefone) ──
+    n_stray = 0
+    phone_set = set(phone_cols)
+    for col in df.columns:
+        if col in phone_set or _is_doc_col(col) or str(col).startswith("_"):
+            continue
+        col_data = df[col].dropna()
+        for idx, raw in col_data.items():
+            if len(re.sub(r"\D", "", str(raw))) < 10:
+                continue  # solto exige DDD (10-11 díg) — pré-filtro barato
+            for ddd, sub8 in _phone_keys_in_cell(raw, strict=True):
+                if ddd is None:
+                    continue
+                if sub8 in lookup and any(d == ddd for d, _ in lookup[sub8]):
+                    continue  # já coberto por uma coluna de telefone
+                add_to_phone_lookup(lookup, (ddd, sub8), rows_dict[idx])
+                lookup_source.setdefault(sub8, f"solto em {col}")
+                n_stray += 1
+    return lookup, lookup_source, n_stray
 
 
 def run_procv(
@@ -521,10 +983,12 @@ def run_procv(
     kommo_phone_col: str,
     kommo_tag_col: str,
     traffic_keyword: str,
+    sales_name_col: Optional[str] = None,
+    kommo_name_col: Optional[str] = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Retorna: (vendas_tratada, kommo_tratada, resultado_trafego, resultado_completo)
-    Varre todas as colunas de telefone para maximizar matches.
+    Hierarquia de match: 1) Telefone principal  2) Telefone alternativo  3) Nome completo
     """
     ds = df_sales.copy()
     pos = ds.columns.get_loc(sales_phone_col) + 1
@@ -536,37 +1000,111 @@ def run_procv(
     dk.insert(pos_k, "Tel_Limpo_Kommo", dk[kommo_phone_col].apply(clean_phone))
     dk.insert(pos_k + 1, "Tel_8dig_Kommo", dk["Tel_Limpo_Kommo"].apply(right8))
 
-    extended_lookup = _build_extended_lookup(df_sales, ds)
-    lookup_keys = set(extended_lookup.keys())
+    extended_lookup, lookup_source, n_stray_sales = _build_extended_lookup(df_sales, ds)
 
-    # Pré-computa right8 de cada coluna do Kommo (vetorizado) e monta sets por linha
-    kommo_row_keys: List[set] = [set() for _ in range(len(dk))]
-    for col in df_kommo.columns:
-        r8_col = dk[col].fillna("").astype(str).apply(
-            lambda v: right8(clean_phone(v)) if v else ""
-        )
-        for i, k in enumerate(r8_col):
-            if k:
-                kommo_row_keys[i].add(k)
+    # Lookup por nome: só nomes únicos nas vendas (nomes ambíguos são descartados)
+    # word_index: palavra → conjunto de nomes normalizados — permite match parcial eficiente
+    name_lookup: dict = {}
+    name_word_index: dict = {}
+    if sales_name_col and sales_name_col in df_sales.columns:
+        _rows_dict = ds.to_dict("index")
+        _name_count: dict = {}
+        for idx in df_sales.index:
+            raw = df_sales.at[idx, sales_name_col]
+            if pd.isna(raw):
+                continue
+            norm = _normalize_name(str(raw))
+            if norm:
+                _name_count[norm] = _name_count.get(norm, 0) + 1
+                if _name_count[norm] == 1:
+                    name_lookup[norm] = _rows_dict[idx]
+                else:
+                    name_lookup.pop(norm, None)  # ambíguo — remove
+        for norm in name_lookup:
+            for word in norm.split():
+                name_word_index.setdefault(word, set()).add(norm)
+
+    # Pré-computa chaves de telefone (ddd, sub8) das colunas de telefone do Kommo por linha.
+    # Lista de (key, col_name) por linha — coluna principal primeiro (prioridade).
+    kommo_phone_cols = [kommo_phone_col] + [
+        c for c in df_kommo.columns
+        if c != kommo_phone_col and not _is_doc_col(c) and _is_phone_col(dk[c].dropna())
+    ]
+    kommo_row_keys: list[list] = [[] for _ in range(len(dk))]
+    for col in kommo_phone_cols:
+        if col not in dk.columns:
+            continue
+        for i, raw in enumerate(dk[col].tolist()):
+            for key in _phone_keys_in_cell(raw):
+                if all(key[1] != k[1] for k, _ in kommo_row_keys[i]):
+                    kommo_row_keys[i].append((key, col))
 
     result_rows = []
+    n_ddd_blocked = 0  # falsos matches evitados (sub8 igual mas DDD diferente)
     for i, (_, kr) in enumerate(dk.iterrows()):
         k8_primary = kr.get("Tel_8dig_Kommo", "")
         tag_raw = "" if pd.isna(kr.get(kommo_tag_col, np.nan)) else str(kr[kommo_tag_col])
-        is_traffic = traffic_keyword.lower() in tag_raw.lower()
+        is_traffic = _tag_contains(tag_raw, traffic_keyword)
 
-        sales_match = extended_lookup.get(k8_primary)
-        if not sales_match:
-            matched_key = next(iter(kommo_row_keys[i] & lookup_keys), None)
-            if matched_key:
-                sales_match = extended_lookup.get(matched_key)
+        # Match por telefone DDD-aware: primeira chave (col principal → alternativas) que casa
+        match_reason = ""
+        sales_match = None
+        matched_sub8 = ""
+        matched_ddd = None
+        blocked_here = False
+        for key, kommo_col in kommo_row_keys[i]:
+            cand = resolve_phone(extended_lookup, key)
+            if not cand:
+                if key[1] in extended_lookup:
+                    blocked_here = True  # mesmo final, mas DDD não bate
+                continue
+            sales_match = cand
+            matched_sub8 = key[1]
+            matched_ddd = key[0]
+            sales_col = lookup_source.get(key[1], "")
+            if str(sales_col).startswith("solto em "):
+                match_reason = f"Telefone solto nas vendas ({sales_col[9:]}) ⚠️ verificar"
+            elif kommo_col == kommo_phone_col and sales_col == sales_phone_col:
+                match_reason = "Telefone"
+            elif kommo_col == kommo_phone_col:
+                match_reason = f"Telefone (vendas: {sales_col})"
+            else:
+                match_reason = f"Col. alt. Kommo: {kommo_col} → vendas: {sales_col}"
+            break
+
+        if not sales_match and kommo_name_col and name_lookup:
+            kommo_name_raw = str(kr.get(kommo_name_col, ""))
+            kommo_norm = _normalize_name(kommo_name_raw)
+            if kommo_norm:
+                if kommo_norm in name_lookup:
+                    # Exact normalized match
+                    sales_match = name_lookup[kommo_norm]
+                    match_reason = "Nome completo ⚠️ verificar"
+                else:
+                    # Partial word match: intersecta candidatos por palavra do nome
+                    kommo_words = kommo_norm.split()
+                    if len(kommo_words) >= 2:
+                        candidates: Optional[set] = None
+                        for _w in kommo_words:
+                            hits = name_word_index.get(_w)
+                            if hits:
+                                candidates = hits.copy() if candidates is None else candidates & hits
+                        if candidates and len(candidates) == 1:
+                            cand = next(iter(candidates))
+                            if _names_match(kommo_norm, cand):
+                                sales_match = name_lookup[cand]
+                                match_reason = "Nome parcial ⚠️ verificar"
+
+        if sales_match is None and blocked_here:
+            n_ddd_blocked += 1
 
         row_out = {
             "Tag_Kommo": tag_raw,
             "Telefone_Kommo": kr.get(kommo_phone_col, ""),
-            "Tel_8dig": k8_primary,
+            "Tel_8dig": _row_ident(matched_ddd, matched_sub8, kr.get(kommo_phone_col, "")),
             "É_Tráfego": "SIM" if is_traffic else "NÃO",
             "Venda_Confirmada": "SIM" if sales_match else "NÃO",
+            "Criterio_Match": match_reason,
         }
         for col in df_sales.columns:
             row_out[f"[Venda] {col}"] = sales_match.get(col, "") if sales_match else ""
@@ -574,13 +1112,20 @@ def run_procv(
         result_rows.append(row_out)
 
     df_full = pd.DataFrame(result_rows)
+    if n_stray_sales:
+        df_full.attrs["n_stray_sales"] = n_stray_sales
+    if n_ddd_blocked:
+        df_full.attrs["n_ddd_blocked"] = n_ddd_blocked
     df_trafego = df_full[
         (df_full["É_Tráfego"] == "SIM") & (df_full["Venda_Confirmada"] == "SIM")
     ].copy()
-    # Bug 2: deduplica por comprador único — mesmo telefone em vários leads Kommo
-    # não deve contar como múltiplas conversões
+    # Deduplica por comprador único — mesmo telefone em vários leads Kommo não conta N vezes.
+    # Leads sem Tel_8dig válido não participam do dedup (senão todos "" colapsam num só).
     if len(df_trafego) > 0:
-        df_trafego = df_trafego.drop_duplicates(subset=["Tel_8dig"]).reset_index(drop=True)
+        mask_tel = df_trafego["Tel_8dig"].str.len() > 0
+        df_com_tel = df_trafego[mask_tel].drop_duplicates(subset=["Tel_8dig"])
+        df_sem_tel = df_trafego[~mask_tel]
+        df_trafego = pd.concat([df_com_tel, df_sem_tel], ignore_index=True)
 
     return ds, dk, df_trafego, df_full
 
@@ -603,9 +1148,41 @@ _MONTH_MAP = {
 def _normalize(s: str) -> str:
     return (s.lower()
             .replace("ç", "c").replace("ã", "a").replace("á", "a")
-            .replace("â", "a").replace("é", "e").replace("ê", "e")
+            .replace("â", "a").replace("à", "a").replace("é", "e").replace("ê", "e")
             .replace("í", "i").replace("ó", "o").replace("ô", "o")
-            .replace("ú", "u").replace("õ", "o"))
+            .replace("ú", "u").replace("ü", "u").replace("õ", "o"))
+
+
+def _tag_contains(tag_text, keyword) -> bool:
+    """True se keyword aparece em tag_text, ignorando acentos, maiúsculas e espaços nas pontas.
+    É o que a UI promete ('a busca ignora maiúsculas/minúsculas e acentos')."""
+    kw = _normalize(str(keyword)).strip()
+    return bool(kw) and kw in _normalize(str(tag_text))
+
+
+_NAME_STOP = {"de", "da", "do", "dos", "das", "e", "di", "du", "van", "von", "el", "la"}
+
+def _normalize_name(name: str) -> str:
+    """Minúsculas, sem acentos, sem artigos/preposições. Ex: 'Dirce Natalina de Vesselai' → 'dirce natalina vesselai'."""
+    s = _normalize(str(name).strip())
+    return " ".join(p for p in s.split() if p not in _NAME_STOP and len(p) > 1)
+
+
+def _names_match(name_a: str, name_b: str) -> bool:
+    """
+    True se os nomes normalizados são equivalentes.
+    Exige ≥ 2 palavras em comum cobrindo todo o nome mais curto.
+    Nomes de 1 palavra são ambíguos demais — não são considerados match.
+    """
+    na = _normalize_name(name_a)
+    nb = _normalize_name(name_b)
+    if not na or not nb:
+        return False
+    pa, pb = set(na.split()), set(nb.split())
+    if len(pa) < 2 or len(pb) < 2:
+        return False
+    common = pa & pb
+    return len(common) >= min(len(pa), len(pb)) and len(common) >= 2
 
 
 def _is_real_datetime(v) -> bool:
@@ -639,17 +1216,23 @@ def parse_date(value) -> Optional[datetime]:
     except (ValueError, OverflowError):
         pass
 
-    # Formato M/D/YY ou M/D/YYYY (americano, comum em exports de sistemas BR)
-    # Ex: "4/30/26 18:05" → April 30, 2026
+    # Formato DD/MM/YY ou DD/MM/YYYY (padrão BR) — fallback MM/DD se dia inválido
+    # Ex: "22/05/26" → May 22; "4/30/26" → April 30 (dia 4 mês 30 inválido, inverte)
     m_us = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{2,4})(?:\s+\d{1,2}:\d{2})?$", s)
     if m_us:
-        mo, dy, yr = int(m_us.group(1)), int(m_us.group(2)), int(m_us.group(3))
+        a, b, yr = int(m_us.group(1)), int(m_us.group(2)), int(m_us.group(3))
         if yr < 100:
             yr += 2000
-        # Se dia > 12, certamente é MM/DD; se mês > 12, é DD/MM
+        # Tenta DD/MM/YYYY primeiro (padrão brasileiro)
         try:
-            if mo <= 12 and dy <= 31:
-                return datetime(yr, mo, dy)
+            if 1 <= a <= 31 and 1 <= b <= 12:
+                return datetime(yr, b, a)
+        except ValueError:
+            pass
+        # Fallback MM/DD/YYYY (ex: "4/30/26" onde dia=30 > 12)
+        try:
+            if 1 <= b <= 31 and 1 <= a <= 12:
+                return datetime(yr, a, b)
         except ValueError:
             pass
 
@@ -711,6 +1294,7 @@ def parse_date(value) -> Optional[datetime]:
     return None
 
 
+@st.cache_data(show_spinner=False)
 def detect_date_col(df: pd.DataFrame) -> Optional[str]:
     """
     Detecta coluna de data por conteúdo primeiro, nome como bônus.
@@ -760,17 +1344,17 @@ def run_disparo(
     disparo_keyword: str,
     kommo_date_col: Optional[str],
     window_days: int = 30,
+    sales_name_col: Optional[str] = None,
+    kommo_name_col: Optional[str] = None,
 ) -> pd.DataFrame:
     """
     Filtra leads de disparo do Kommo pela tag e cruza com vendas.
     Janela de tempo: venda entre 0 e window_days após a data do disparo no Kommo.
-    Sem datas: inclui todos os matches para filtro manual.
+    Hierarquia de match: 1) Telefone  2) Telefone alternativo  3) Nome completo/parcial
     """
-    # Filtra leads de disparo no Kommo
-    disparo_mask = (
-        df_kommo[kommo_tag_col].fillna("").astype(str)
-        .str.lower()
-        .str.contains(disparo_keyword.lower(), regex=False)
+    # Filtra leads de disparo no Kommo (ignora acentos e maiúsculas)
+    disparo_mask = df_kommo[kommo_tag_col].fillna("").astype(str).apply(
+        lambda t: _tag_contains(t, disparo_keyword)
     )
     df_disp_leads = df_kommo[disparo_mask].copy()
 
@@ -778,84 +1362,167 @@ def run_disparo(
         return pd.DataFrame()
 
     ds = df_sales.copy()
-    ds["_tel8"] = ds[sales_phone_col].apply(
-        lambda v: right8(clean_phone(str(v))) if pd.notna(v) else ""
-    )
     if sales_date_col:
         ds["_dt_venda"] = ds[sales_date_col].apply(parse_date)
 
-    # Lookup estendido: todas as colunas de telefone das vendas
-    # added_sale_idx: evita Bug 4 — mesma linha sob chaves diferentes (2 colunas de tel)
-    added_sale_keys: set = set()  # (key, idx) para evitar duplicar por key
+    # Lookup estendido DDD-aware: {sub8: [(ddd, sale_dict), ...]} — todas as colunas de
+    # telefone das vendas + telefones soltos. added_sale_keys evita duplicar a mesma linha.
+    added_sale_keys: set = set()    # (sub8, idx)
     sales_lookup: dict = {}
+    sales_lookup_source: dict = {}  # {sub8: col_name}
+    phone_cols_sales = [c for c in df_sales.columns
+                        if not _is_doc_col(c) and _is_phone_col(df_sales[c].dropna())]
+    for col in phone_cols_sales:
+        for idx, raw in df_sales[col].dropna().items():
+            for ddd, sub8 in _phone_keys_in_cell(raw):
+                if (sub8, idx) in added_sale_keys:
+                    continue
+                sales_lookup.setdefault(sub8, []).append((ddd, ds.loc[idx].to_dict()))
+                added_sale_keys.add((sub8, idx))
+                sales_lookup_source.setdefault(sub8, col)
+    # Telefones soltos fora das colunas de telefone (número fora da coluna)
     for col in df_sales.columns:
-        if _is_doc_col(col):
+        if col in phone_cols_sales or _is_doc_col(col):
             continue
-        col_data = df_sales[col].dropna()
-        if not _is_phone_col(col_data):
+        for idx, raw in df_sales[col].dropna().items():
+            if len(re.sub(r"\D", "", str(raw))) < 10:
+                continue
+            for ddd, sub8 in _phone_keys_in_cell(raw, strict=True):
+                if ddd is None or (sub8, idx) in added_sale_keys:
+                    continue
+                sales_lookup.setdefault(sub8, []).append((ddd, ds.loc[idx].to_dict()))
+                added_sale_keys.add((sub8, idx))
+                sales_lookup_source.setdefault(sub8, f"solto em {col}")
+
+    # Lookup por nome para fallback (nomes únicos nas vendas)
+    disp_name_lookup: dict = {}
+    disp_name_word_index: dict = {}
+    if sales_name_col and sales_name_col in df_sales.columns:
+        _ds_rows = ds.to_dict("index")
+        _nc: dict = {}
+        for _idx in df_sales.index:
+            _raw = df_sales.at[_idx, sales_name_col]
+            if pd.isna(_raw):
+                continue
+            _norm = _normalize_name(str(_raw))
+            if _norm:
+                _nc[_norm] = _nc.get(_norm, 0) + 1
+                if _nc[_norm] == 1:
+                    disp_name_lookup[_norm] = _ds_rows[_idx]
+                else:
+                    disp_name_lookup.pop(_norm, None)
+        for _n in disp_name_lookup:
+            for _w in _n.split():
+                disp_name_word_index.setdefault(_w, set()).add(_n)
+
+    # Pré-computa chaves (ddd, sub8) das colunas de telefone para cada lead de disparo.
+    # Lista de (key, col_name) por linha — coluna principal primeiro (prioridade).
+    df_disp_reset = df_disp_leads.reset_index(drop=True)
+    disp_phone_cols = [kommo_phone_col] + [
+        c for c in df_disp_reset.columns
+        if c != kommo_phone_col and not _is_doc_col(c) and _is_phone_col(df_disp_reset[c].dropna())
+    ]
+    disp_row_keys: list[list] = [[] for _ in range(len(df_disp_reset))]
+    for _col in disp_phone_cols:
+        if _col not in df_disp_reset.columns:
             continue
-        for idx in col_data.index:
-            cleaned = clean_phone(str(df_sales.at[idx, col]))
-            if len(cleaned) >= 8:
-                key = right8(cleaned)
-                if key and (key, idx) not in added_sale_keys:
-                    sales_lookup.setdefault(key, []).append(ds.loc[idx].to_dict())
-                    added_sale_keys.add((key, idx))
+        for _i, raw in enumerate(df_disp_reset[_col].tolist()):
+            for key in _phone_keys_in_cell(raw):
+                if all(key[1] != k[1] for k, _ in disp_row_keys[_i]):
+                    disp_row_keys[_i].append((key, _col))
 
     result_rows = []
-    for _, kr in df_disp_leads.iterrows():
+    for _i, (_, kr) in enumerate(df_disp_reset.iterrows()):
         tel_raw = kr.get(kommo_phone_col, "")
-        tel8_primary = right8(clean_phone(str(tel_raw))) if pd.notna(tel_raw) else ""
 
-        # Coleta todas as chaves right8 deste lead (todas as colunas)
-        all_tel8: list = []
-        if tel8_primary:
-            all_tel8.append(tel8_primary)
-        for col in df_kommo.columns:
-            v = kr.get(col, "")
-            if pd.isna(v):
-                continue
-            cleaned = clean_phone(str(v))
-            if len(cleaned) >= 8:
-                k8 = right8(cleaned)
-                if k8 and k8 not in all_tel8:
-                    all_tel8.append(k8)
-
-        if not all_tel8:
+        row_keys = disp_row_keys[_i]
+        has_phone = bool(row_keys)
+        has_name_fallback = bool(kommo_name_col and disp_name_lookup)
+        if not has_phone and not has_name_fallback:
             continue
 
         # Tenta obter a data do disparo de múltiplas fontes (inteligência)
         disp_date = parse_date(kr.get(kommo_date_col)) if kommo_date_col else None
         if not _is_real_datetime(disp_date):
-            # Fallback: extrai data embutida no texto da tag ("Disparo dia das Mães 22/04")
             disp_date = parse_date(str(kr.get(kommo_tag_col, "")))
 
-        # Dois níveis de match:
-        # 1. confirmed: telefone bate + data da venda DENTRO da janela (0..30 dias após disparo)
-        # 2. phone_only: telefone bate + data da venda não parseável (inclui para revisão manual)
-        # Vendas com data ANTES do disparo são explicitamente rejeitadas.
         confirmed_sale = None
         phone_only_sale = None
+        match_reason = ""
+        matched_sub8 = ""
+        matched_ddd = None
 
-        for tel8 in all_tel8:
+        # ── Match por telefone DDD-aware ──────────────────────────────────
+        for key, k_col in row_keys:
             if confirmed_sale:
                 break
-            for sale in sales_lookup.get(tel8, []):
+            sub8 = key[1]
+            s_col = sales_lookup_source.get(sub8, sales_phone_col)
+            if str(s_col).startswith("solto em "):
+                _mr = f"Telefone solto nas vendas ({s_col[9:]}) ⚠️ verificar"
+            elif k_col == kommo_phone_col and s_col == sales_phone_col:
+                _mr = "Telefone"
+            elif k_col == kommo_phone_col:
+                _mr = f"Telefone (vendas: {s_col})"
+            else:
+                _mr = f"Col. alt. Kommo: {k_col} → vendas: {s_col}"
+            for sale in resolve_phone_all(sales_lookup, key):
                 if _is_real_datetime(disp_date) and sales_date_col:
                     sale_dt = sale.get("_dt_venda")
                     if _is_real_datetime(sale_dt):
                         delta = (sale_dt - disp_date).days
                         if 0 <= delta <= window_days:
                             confirmed_sale = sale
+                            match_reason = _mr
+                            matched_sub8 = sub8; matched_ddd = key[0]
                             break
-                        # delta < 0 = venda antes do disparo → rejeita explicitamente
                     elif phone_only_sale is None:
-                        # data não parseável → guarda como fallback
                         phone_only_sale = sale
+                        match_reason = _mr
+                        matched_sub8 = sub8; matched_ddd = key[0]
                 else:
-                    # sem data de disparo ou sem coluna de data → match por telefone
                     confirmed_sale = sale
+                    match_reason = _mr
+                    matched_sub8 = sub8; matched_ddd = key[0]
                     break
+
+        # ── Fallback: match por nome (só quando telefone falhou) ─────────
+        if not confirmed_sale and not phone_only_sale and has_name_fallback:
+            kommo_name_raw = str(kr.get(kommo_name_col, ""))
+            kommo_norm = _normalize_name(kommo_name_raw)
+            name_candidate = None
+            _nr = ""
+            if kommo_norm:
+                if kommo_norm in disp_name_lookup:
+                    name_candidate = disp_name_lookup[kommo_norm]
+                    _nr = "Nome completo ⚠️ verificar"
+                else:
+                    _dw = kommo_norm.split()
+                    if len(_dw) >= 2:
+                        _nc2: Optional[set] = None
+                        for _w in _dw:
+                            _h = disp_name_word_index.get(_w)
+                            if _h:
+                                _nc2 = _h.copy() if _nc2 is None else _nc2 & _h
+                        if _nc2 and len(_nc2) == 1:
+                            _cand = next(iter(_nc2))
+                            if _names_match(kommo_norm, _cand):
+                                name_candidate = disp_name_lookup[_cand]
+                                _nr = "Nome parcial ⚠️ verificar"
+            if name_candidate:
+                if _is_real_datetime(disp_date) and sales_date_col:
+                    sale_dt = name_candidate.get("_dt_venda")
+                    if _is_real_datetime(sale_dt):
+                        delta = (sale_dt - disp_date).days
+                        if 0 <= delta <= window_days:
+                            confirmed_sale = name_candidate
+                            match_reason = _nr
+                    else:
+                        phone_only_sale = name_candidate
+                        match_reason = _nr
+                else:
+                    confirmed_sale = name_candidate
+                    match_reason = _nr
 
         matched_sale = confirmed_sale if confirmed_sale else phone_only_sale
 
@@ -863,7 +1530,7 @@ def run_disparo(
         row_out: dict = {
             "Tag_Kommo": tag_raw,
             "Telefone_Disparo": tel_raw,
-            "Tel_8dig": tel8_primary,
+            "Tel_8dig": _row_ident(matched_ddd, matched_sub8, tel_raw),
         }
 
         if kommo_date_col:
@@ -871,6 +1538,7 @@ def run_disparo(
 
         if matched_sale:
             row_out["Venda_Confirmada"] = "SIM"
+            row_out["Criterio_Match"] = match_reason
             if sales_date_col:
                 sale_dt = matched_sale.get("_dt_venda")
                 if _is_real_datetime(sale_dt):
@@ -883,6 +1551,7 @@ def run_disparo(
                 row_out[f"[Venda] {col}"] = matched_sale.get(col, "")
         else:
             row_out["Venda_Confirmada"] = "NÃO"
+            row_out["Criterio_Match"] = ""
             if sales_date_col:
                 row_out["Data_Venda"] = ""
                 if disp_date:
@@ -898,10 +1567,12 @@ def run_disparo(
     # Deduplica por Tel_8dig: mesmo comprador em múltiplos leads Kommo não conta N vezes.
     # Prioriza Venda_Confirmada=SIM sobre NÃO antes de desduplicar.
     if "Tel_8dig" in df_res.columns:
-        df_res = (df_res
-                  .sort_values("Venda_Confirmada", ascending=True)  # NÃO < SIM
-                  .drop_duplicates(subset=["Tel_8dig"])
-                  .reset_index(drop=True))
+        mask_tel = df_res["Tel_8dig"].str.len() > 0
+        df_com_tel = (df_res[mask_tel]
+                      .sort_values("Venda_Confirmada", ascending=True)  # NÃO < SIM
+                      .drop_duplicates(subset=["Tel_8dig"]))
+        df_sem_tel = df_res[~mask_tel]
+        df_res = pd.concat([df_com_tel, df_sem_tel], ignore_index=True)
     return df_res
 
 
@@ -943,12 +1614,12 @@ def analyze_duplicates(
     """
     result = df.copy()
     phones = df[phone_col].apply(
-        lambda v: right8(clean_phone(str(v))) if pd.notna(v) else ""
+        lambda v: phone_group_key(v) if pd.notna(v) else ""
     )
 
     situacao = pd.Series(["Única"] * len(df), index=df.index, dtype=str)
 
-    counts = phones.value_counts()
+    counts = phones[phones != ""].value_counts()
     multi_phones = counts[counts > 1].index
 
     id_cols = {col for col in df.columns if _is_id_col(df[col], col)}
@@ -977,9 +1648,10 @@ def analyze_duplicates(
         group = df[mask]
 
         if date_col and date_col in df.columns:
-            date_keys = group[date_col].apply(
-                lambda v: (parse_date(v).strftime("%Y-%m-%d") if parse_date(v) else "")
-            )
+            def _fmt_date(v):
+                d = parse_date(v)
+                return d.strftime("%Y-%m-%d") if d else ""
+            date_keys = group[date_col].apply(_fmt_date)
             unique_dates = set(d for d in date_keys if d)
         else:
             date_keys = pd.Series([""] * len(group), index=group.index)
@@ -1045,41 +1717,90 @@ def _write_sheet(
         cell.border = THIN
     ws.row_dimensions[2].height = 24
 
+    # Estilos pré-criados — evita instanciar N×M objetos dentro do loop
+    _FONT_DATA      = Font(size=10)
+    _FONT_WB        = Font(color="FFFFFF", bold=True, size=10)
+    _FONT_DARK_B    = Font(color="1C1C1E", bold=True, size=10)
+    _FILL_ZEBRA     = PatternFill("solid", fgColor="F5F5F5")
+    _FILL_GREEN     = PatternFill("solid", fgColor="27AE60")
+    _FILL_RED       = PatternFill("solid", fgColor="E74C3C")
+    _FILL_BLUE_T    = PatternFill("solid", fgColor="2980B9")
+    _FILL_BLUE_ALT  = PatternFill("solid", fgColor="5DADE2")
+    _FILL_AMBER     = PatternFill("solid", fgColor="F39C12")
+    _FILL_AMBER_ROW = PatternFill("solid", fgColor="FEF3E2")   # fundo de linha para revisão
+    _FILL_AMBER_ROW_Z = PatternFill("solid", fgColor="FDEBD0") # versão zebra
+    _FILL_DUP_RED   = PatternFill("solid", fgColor="C0392B")
+    _FILL_DUP_ORA   = PatternFill("solid", fgColor="E67E22")
+    _FILL_MULTI_B   = PatternFill("solid", fgColor="2471A3")
+    _FILL_HL        = PatternFill("solid", fgColor="FFE5D9")
+    _FILL_HL_Z      = PatternFill("solid", fgColor="FFD5B8")
+
+    # Índice da coluna "Criterio_Match" para detectar match por nome no nível da linha
+    _criterio_idx = list(df.columns).index("Criterio_Match") if "Criterio_Match" in df.columns else -1
+
     # Dados
     highlight_set = set(highlight_cols or [])
     for r, row_data in enumerate(df.itertuples(index=False), 3):
         zebra = (r - 3) % 2 == 1
-        for c, value in enumerate(row_data, 1):
+        row_vals = list(row_data)
+        criterio_val = str(row_vals[_criterio_idx]) if _criterio_idx >= 0 else ""
+        is_name_match = criterio_val.startswith("Nome")
+
+        for c, value in enumerate(row_vals, 1):
             col_name = df.columns[c - 1]
             cell = ws.cell(r, c, value if value != "" else None)
-            cell.font = Font(size=10)
+            cell.font = _FONT_DATA
             cell.alignment = LEFT
             cell.border = THIN
 
             if col_name == "Venda_Confirmada":
                 if value == "SIM":
-                    cell.fill = PatternFill("solid", fgColor="27AE60")
-                    cell.font = Font(color="FFFFFF", bold=True, size=10)
+                    # Match por nome: âmbar (precisa revisão). Match por tel: verde.
+                    if is_name_match:
+                        cell.fill = _FILL_AMBER
+                        cell.font = _FONT_DARK_B
+                    else:
+                        cell.fill = _FILL_GREEN
+                        cell.font = _FONT_WB
                 elif value == "NÃO":
-                    cell.fill = PatternFill("solid", fgColor="E74C3C")
-                    cell.font = Font(color="FFFFFF", bold=True, size=10)
+                    cell.fill = _FILL_RED
+                    cell.font = _FONT_WB
+            elif col_name == "Criterio_Match":
+                sv = str(value)
+                if sv == "Telefone":
+                    cell.fill = _FILL_GREEN
+                    cell.font = _FONT_WB
+                elif sv == "Telefone (col. alternativa)":
+                    cell.fill = _FILL_BLUE_ALT
+                    cell.font = _FONT_WB
+                elif sv.startswith("Nome"):
+                    cell.fill = _FILL_AMBER
+                    cell.font = _FONT_DARK_B
             elif col_name == "É_Tráfego" and value == "SIM":
-                cell.fill = PatternFill("solid", fgColor="2980B9")
-                cell.font = Font(color="FFFFFF", bold=True, size=10)
+                cell.fill = _FILL_BLUE_T
+                cell.font = _FONT_WB
             elif col_name == "Situacao_Venda":
-                if str(value).startswith("DUPLICATA"):
-                    cell.fill = PatternFill("solid", fgColor="C0392B")
-                    cell.font = Font(color="FFFFFF", bold=True, size=10)
-                elif "mesmo dia" in str(value) or "sem data" in str(value):
-                    cell.fill = PatternFill("solid", fgColor="E67E22")
-                    cell.font = Font(color="FFFFFF", bold=True, size=10)
-                elif str(value).startswith("Multi"):
-                    cell.fill = PatternFill("solid", fgColor="2471A3")
-                    cell.font = Font(color="FFFFFF", bold=True, size=10)
+                sv = str(value)
+                if sv.startswith("DUPLICATA"):
+                    cell.fill = _FILL_DUP_RED
+                    cell.font = _FONT_WB
+                elif "mesmo dia" in sv or "sem data" in sv:
+                    cell.fill = _FILL_DUP_ORA
+                    cell.font = _FONT_WB
+                elif sv.startswith("Multi"):
+                    cell.fill = _FILL_MULTI_B
+                    cell.font = _FONT_WB
+                elif is_name_match:
+                    cell.fill = _FILL_AMBER_ROW_Z if zebra else _FILL_AMBER_ROW
+                elif zebra:
+                    cell.fill = _FILL_ZEBRA
             elif col_name in highlight_set:
-                cell.fill = PatternFill("solid", fgColor="FFE5D9" if not zebra else "FFD5B8")
+                cell.fill = _FILL_HL if not zebra else _FILL_HL_Z
+            elif is_name_match:
+                # Toda a linha com fundo âmbar claro para indicar revisão
+                cell.fill = _FILL_AMBER_ROW_Z if zebra else _FILL_AMBER_ROW
             elif zebra:
-                cell.fill = PatternFill("solid", fgColor="F5F5F5")
+                cell.fill = _FILL_ZEBRA
         ws.row_dimensions[r].height = 17
 
     # Largura das colunas
@@ -1099,7 +1820,7 @@ def _rename_result_cols(df: pd.DataFrame) -> pd.DataFrame:
         "Tag_Kommo": "Tag no Kommo",
         "Telefone_Kommo": "Telefone (Kommo)",
         "Telefone_Disparo": "Telefone (Disparo)",
-        "Tel_8dig": "Tel. (8 dígitos)",
+        "Tel_8dig": "Tel. (identificador)",
         "Tel_Limpo_Vendas": "Tel. Limpo (Vendas)",
         "Tel_8dig_Vendas": "Tel. 8 dígitos (Vendas)",
         "Tel_Limpo_Kommo": "Tel. Limpo (Kommo)",
@@ -1109,6 +1830,7 @@ def _rename_result_cols(df: pd.DataFrame) -> pd.DataFrame:
         "Dias_Após_Disparo": "Dias após o Disparo",
         "Situacao_Venda": "Situação do Registro",
         "Origem": "Origem da Venda",
+        "Criterio_Match": "Como encontrou",
     })
 
 
@@ -1153,7 +1875,7 @@ def _write_guide_sheet(ws, summary_data: dict):
     r = 1
     # ── Cabeçalho ─────────────────────────────────────────────────────
     ws.merge_cells(f"A{r}:D{r}")
-    hdr = ws.cell(r, 1, "📋  PROC-BULLS — GUIA DE LEITURA")
+    hdr = ws.cell(r, 1, "📋  PROC AURE — GUIA DE LEITURA")
     hdr.font = Font(color=WHITE, bold=True, size=16)
     hdr.fill = PatternFill("solid", fgColor=PURPLE)
     hdr.alignment = Alignment(horizontal="center", vertical="center")
@@ -1161,7 +1883,7 @@ def _write_guide_sheet(ws, summary_data: dict):
     r += 1
 
     ws.merge_cells(f"A{r}:D{r}")
-    sub = ws.cell(r, 1, "Desenvolvido por João  ·  Aure Digital  ·  Proc-Bulls")
+    sub = ws.cell(r, 1, "Desenvolvido por João  ·  Aure Digital  ·  Proc Aure")
     sub.font = Font(italic=True, size=10, color="888888")
     sub.alignment = Alignment(horizontal="center")
     ws.row_dimensions[r].height = 18
@@ -1327,7 +2049,7 @@ def build_excel(
     # ── Aba 2: Resumo ─────────────────────────────────────────────────
     ws_res = wb.create_sheet("📊 Resumo")
     ws_res.merge_cells("A1:C1")
-    t = ws_res.cell(1, 1, "RESUMO DO PROC-BULLS")
+    t = ws_res.cell(1, 1, "RESUMO DO PROC AURE")
     t.font = Font(color="FFFFFF", bold=True, size=14)
     t.fill = PatternFill("solid", fgColor="7B2FBE")
     t.alignment = Alignment(horizontal="center", vertical="center")
@@ -1439,7 +2161,7 @@ def build_excel(
     # ── Rodapé em todas as abas ───────────────────────────────────────
     for ws in all_sheets:
         r = ws.max_row + 2
-        ws.cell(r, 1, "Desenvolvido por João  ·  Proc-Bulls  ·  Aure Digital").font = Font(
+        ws.cell(r, 1, "Desenvolvido por João  ·  Proc Aure  ·  Aure Digital").font = Font(
             italic=True, color="AAAAAA", size=9
         )
 
@@ -1450,11 +2172,43 @@ def build_excel(
 
 # ── Interface ──────────────────────────────────────────────────────────────────
 
+_PHONE_NAME_KWS = ["telefone", "celular", "whatsapp", "wpp", "fone", "phone",
+                   "mobile", "cel", "tel", "contato", "numero", "número"]
+
+
+def _phone_col_confidence(df: pd.DataFrame, col: Optional[str]) -> str:
+    """Confiança da auto-detecção de telefone: alta / média / baixa."""
+    if col is None or col not in df.columns:
+        return ""
+    sample = df[col].dropna().head(30)
+    if len(sample) == 0:
+        return "baixa"
+    ratio = sample.apply(_looks_like_phone).sum() / len(sample)
+    name_match = _match_keywords(col, _PHONE_NAME_KWS)
+    if name_match and ratio >= 0.6:
+        return "alta"
+    if name_match or ratio >= 0.6:
+        return "média"
+    return "baixa"
+
+
+def _show_treatment_notes(df: Optional[pd.DataFrame], origem: str) -> None:
+    """Exibe o bloco '🧠 O que a ferramenta tratou' a partir das notas em df.attrs."""
+    if df is None:
+        return
+    notes = df.attrs.get("treatment_notes", [])
+    if not notes:
+        return
+    with st.expander(f"🧠 O que a ferramenta tratou — {origem}", expanded=True):
+        for n in notes:
+            st.markdown(f"• {n}")
+
+
 st.markdown("""
 <div class="hero-wrap">
   <div class="hero-badge">Aure Digital</div>
-  <h1 class="hero-title" translate="no">PROC-BULLS</h1>
-  <p class="hero-subtitle">Análise inteligente de conversão · Tráfego & Disparo</p>
+  <h1 class="hero-title" translate="no">Proc&nbsp;Aure</h1>
+  <p class="hero-subtitle">Análise inteligente de conversão · Tráfego &amp; Disparo</p>
 </div>
 """, unsafe_allow_html=True)
 st.divider()
@@ -1509,6 +2263,7 @@ with col_left:
                         f"A análise principal (datas, valores, duplicatas) usa: **'{', '.join(pri)}'**."
                     )
                 st.success(f"✅ {len(df_sales_raw):,} linhas · {len(df_sales_raw.columns)} colunas")
+                _show_treatment_notes(df_sales_raw, "Vendas")
                 with st.expander("Prévia"):
                     st.dataframe(df_sales_raw.head(6), use_container_width=True)
 
@@ -1546,6 +2301,7 @@ with col_right:
                     if hrow > 0:
                         st.info(f"📋 '{sheet}': cabeçalho detectado na linha {hrow + 1} — título(s) anteriores ignorados.")
                 st.success(f"✅ {len(df_kommo_raw):,} linhas · {len(df_kommo_raw.columns)} colunas")
+                _show_treatment_notes(df_kommo_raw, "Kommo")
                 with st.expander("Prévia"):
                     st.dataframe(df_kommo_raw.head(6), use_container_width=True)
 
@@ -1572,6 +2328,7 @@ if kommo_disparo_file:
         )
         if df_kommo_disparo_raw is not None:
             st.success(f"✅ Kommo Disparo: {len(df_kommo_disparo_raw):,} linhas · {len(df_kommo_disparo_raw.columns)} colunas")
+            _show_treatment_notes(df_kommo_disparo_raw, "Kommo Disparo")
             with st.expander("Prévia"):
                 st.dataframe(df_kommo_disparo_raw.head(6), use_container_width=True)
 
@@ -1585,6 +2342,8 @@ if df_sales_raw is not None and df_kommo_raw is not None:
     auto_kp = detect_phone_col(df_kommo_raw)
     auto_kt = detect_tag_col(df_kommo_raw)
     auto_vl = detect_value_col(df_sales_raw)
+    auto_sn = detect_name_col(df_sales_raw)
+    auto_kn = detect_name_col(df_kommo_raw)
 
     def _idx(df, col):
         cols = list(df.columns)
@@ -1597,10 +2356,12 @@ if df_sales_raw is not None and df_kommo_raw is not None:
             list(df_sales_raw.columns),
             index=_idx(df_sales_raw, auto_sp),
             help="Coluna da planilha de vendas com o telefone/WhatsApp do cliente. "
-                 "A ferramenta usa os últimos 8 dígitos para comparar — funciona mesmo com DDD, sem DDD, com ou sem o 9.",
+                 "A comparação casa números com DDD, sem DDD, com ou sem o 9 — mas exige "
+                 "que o DDD bata quando os dois lados têm, evitando juntar cidades diferentes.",
         )
         if auto_sp == sales_phone_col:
-            st.caption("✨ Auto-detectado")
+            _conf = _phone_col_confidence(df_sales_raw, auto_sp)
+            st.caption(f"✨ Auto-detectado · confiança {_conf}")
     with c2:
         kommo_phone_col = st.selectbox(
             "Coluna de telefone — Kommo",
@@ -1610,7 +2371,8 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                  "Mesmo que o número esteja em outra coluna, a ferramenta testa todas automaticamente.",
         )
         if auto_kp == kommo_phone_col:
-            st.caption("✨ Auto-detectado")
+            _confk = _phone_col_confidence(df_kommo_raw, auto_kp)
+            st.caption(f"✨ Auto-detectado · confiança {_confk}")
     with c3:
         kommo_tag_col = st.selectbox(
             "Coluna de tags — Kommo",
@@ -1632,19 +2394,45 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                  "Exemplos: 'trafego', 'pago', 'ads', 'lead trafego'.",
         )
 
-    # Coluna de valor monetário
+    # Colunas de nome (fallback quando telefone não bate)
     none_val = "(não usar)"
-    val_opts = [none_val] + list(df_sales_raw.columns)
-    val_default = val_opts.index(auto_vl) if auto_vl and auto_vl in val_opts else 0
-    sales_value_col_sel = st.selectbox(
-        "Coluna de valor da venda *(opcional)*",
-        val_opts, index=val_default, key="sales_value_col",
-        help="Se a planilha de vendas tiver uma coluna com o valor em R$ de cada venda, selecione aqui. "
-             "A ferramenta vai calcular e exibir a receita total de tráfego e de disparo.",
-    )
-    sales_value_col = None if sales_value_col_sel == none_val else sales_value_col_sel
-    if auto_vl == sales_value_col:
-        st.caption("✨ Auto-detectado")
+    nm1, nm2, nm3 = st.columns(3)
+    with nm1:
+        name_opts_s = [none_val] + list(df_sales_raw.columns)
+        name_default_s = name_opts_s.index(auto_sn) if auto_sn and auto_sn in name_opts_s else 0
+        sales_name_col_sel = st.selectbox(
+            "Coluna de nome — Vendas *(fallback)*",
+            name_opts_s, index=name_default_s, key="sales_name_col",
+            help="Quando o telefone não bate, a ferramenta tenta cruzar pelo nome completo. "
+                 "Selecione a coluna de nome na planilha de vendas. "
+                 "Matches por nome são sinalizados com ⚠️ para revisão manual.",
+        )
+        sales_name_col: Optional[str] = None if sales_name_col_sel == none_val else sales_name_col_sel
+        if auto_sn == sales_name_col:
+            st.caption("✨ Auto-detectado")
+    with nm2:
+        name_opts_k = [none_val] + list(df_kommo_raw.columns)
+        name_default_k = name_opts_k.index(auto_kn) if auto_kn and auto_kn in name_opts_k else 0
+        kommo_name_col_sel = st.selectbox(
+            "Coluna de nome — Kommo *(fallback)*",
+            name_opts_k, index=name_default_k, key="kommo_name_col",
+            help="Coluna de nome dos leads no Kommo. Usada como critério de fallback.",
+        )
+        kommo_name_col: Optional[str] = None if kommo_name_col_sel == none_val else kommo_name_col_sel
+        if auto_kn == kommo_name_col:
+            st.caption("✨ Auto-detectado")
+    with nm3:
+        val_opts = [none_val] + list(df_sales_raw.columns)
+        val_default = val_opts.index(auto_vl) if auto_vl and auto_vl in val_opts else 0
+        sales_value_col_sel = st.selectbox(
+            "Coluna de valor da venda *(opcional)*",
+            val_opts, index=val_default, key="sales_value_col",
+            help="Se a planilha de vendas tiver uma coluna com o valor em R$ de cada venda, selecione aqui. "
+                 "A ferramenta vai calcular e exibir a receita total de tráfego e de disparo.",
+        )
+        sales_value_col = None if sales_value_col_sel == none_val else sales_value_col_sel
+        if auto_vl == sales_value_col:
+            st.caption("✨ Auto-detectado")
 
     # ── Configuração de Disparo ────────────────────────────────────────────────
     st.markdown("##### 📣 Disparo")
@@ -1747,7 +2535,7 @@ if df_sales_raw is not None and df_kommo_raw is not None:
     # ── Passo 3: Processar ─────────────────────────────────────────────────────
     st.markdown('<div class="step-wrap"><div class="step-num">3</div><div class="step-text">Processar</div></div>', unsafe_allow_html=True)
 
-    if st.button("🎯  RODAR PROC-BULLS", use_container_width=True, type="primary"):
+    if st.button("✨  RODAR PROC AURE", use_container_width=True, type="primary"):
         progress = st.progress(0, text="Iniciando...")
         try:
             progress.progress(10, text="Cruzando vendas com Kommo...")
@@ -1755,6 +2543,8 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                 df_sales_raw, sales_phone_col,
                 df_kommo_raw, kommo_phone_col, kommo_tag_col,
                 traffic_keyword,
+                sales_name_col=sales_name_col,
+                kommo_name_col=kommo_name_col,
             )
 
             # Compradores únicos (deduplicado por Tel_8dig no run_procv)
@@ -1767,18 +2557,20 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                     df_sales_raw, sales_phone_col, sales_date_col,
                     df_kommo_disp, kommo_disp_phone_col, kommo_disp_tag_col,
                     disparo_keyword, kommo_date_col,
+                    sales_name_col=sales_name_col,
+                    kommo_name_col=kommo_name_col,
                 )
 
             # ── Atribuição: sobreposição tráfego × disparo ────────────────────
             trafego_phones: set = set()
             if len(df_result) > 0 and "Tel_8dig" in df_result.columns:
-                trafego_phones = set(df_result["Tel_8dig"].dropna().values)
+                trafego_phones = {v for v in df_result["Tel_8dig"].dropna() if v}
 
             disparo_phones: set = set()
             if df_disparo_result is not None and len(df_disparo_result) > 0:
                 disp_sim = df_disparo_result[df_disparo_result["Venda_Confirmada"] == "SIM"]
                 if "Tel_8dig" in disp_sim.columns:
-                    disparo_phones = set(disp_sim["Tel_8dig"].dropna().values)
+                    disparo_phones = {v for v in disp_sim["Tel_8dig"].dropna() if v}
 
             overlap_phones = trafego_phones & disparo_phones
 
@@ -1973,6 +2765,23 @@ if df_sales_raw is not None and df_kommo_raw is not None:
             if n_dup == 0 and n_multi == 0:
                 st.success("Nenhuma duplicata detectada nos dados de vendas.")
 
+            # ── O que o cruzamento tratou (telefones soltos + falsos matches evitados) ──
+            n_stray = df_full.attrs.get("n_stray_sales", 0)
+            n_blocked = df_full.attrs.get("n_ddd_blocked", 0)
+            if n_stray or n_blocked:
+                msgs = []
+                if n_stray:
+                    msgs.append(
+                        f"📌 **{n_stray} telefone(s) fora da coluna de telefone** foram "
+                        f"localizados e cruzados mesmo assim (marcados com ⚠️ no Excel)."
+                    )
+                if n_blocked:
+                    msgs.append(
+                        f"🛡️ **{n_blocked} falso(s) match(es) evitado(s)** — números com o mesmo "
+                        f"final mas DDD de cidade diferente **não** foram contados como a mesma pessoa."
+                    )
+                st.info("🧠 **O que o cruzamento tratou:**\n\n" + "\n\n".join(msgs))
+
             st.divider()
 
         except Exception:
@@ -1986,7 +2795,7 @@ if df_sales_raw is not None and df_kommo_raw is not None:
         st.download_button(
             label="📥  Baixar Excel — Resultado Completo",
             data=st.session_state["excel_bytes"],
-            file_name="proc_bulls_resultado.xlsx",
+            file_name="proc_aure_resultado.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
         )
@@ -2001,6 +2810,6 @@ else:
 # ── Rodapé ─────────────────────────────────────────────────────────────────────
 st.markdown("---")
 st.markdown(
-    '<div class="footer">Desenvolvido por João &nbsp;·&nbsp; Proc-Bulls v1.0 &nbsp;·&nbsp; Aure Digital</div>',
+    '<div class="footer">Desenvolvido por <b>João</b> &nbsp;·&nbsp; Proc Aure &nbsp;·&nbsp; Aure Digital</div>',
     unsafe_allow_html=True,
 )
