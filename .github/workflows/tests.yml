@@ -1,0 +1,35 @@
+name: Testes
+
+# Roda as baterias de teste a cada push e PR. Como o Streamlit Cloud faz deploy
+# da branch main, este check serve de "trava": se um teste quebra, o badge fica
+# vermelho e o problema aparece antes de afetar o app em produção.
+on:
+  push:
+  pull_request:
+
+jobs:
+  testes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      - name: Tratamento de planilhas
+        run: python tests/test_tratamento.py
+
+      - name: Cenários variados
+        run: python tests/test_cenarios.py
+
+      - name: Robustez (dados sujos)
+        run: python tests/test_robustez.py
+
+      - name: Multi-mês / multi-aba
+        run: python tests/test_multimes.py

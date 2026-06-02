@@ -496,20 +496,33 @@ def detect_value_col(df: pd.DataFrame) -> Optional[str]:
 
 
 def parse_value(v) -> float:
-    """Converte string de valor monetário para float."""
+    """Converte string de valor monetário para float, tolerando:
+    R$, espaços, milhar/decimal em formato BR (1.234,56) ou US (1,234.56),
+    negativos com sinal (-50) ou contábil ((50,00)) e ruído de texto."""
     if v is None or (isinstance(v, float) and np.isnan(v)):
         return 0.0
     s = str(v).strip()
-    s = re.sub(r"[R$\s]", "", s)
-    # Formato brasileiro: 1.234,56 → 1234.56
-    if re.match(r"^\d{1,3}(\.\d{3})*(,\d+)?$", s):
+    if not s:
+        return 0.0
+    neg = (s.startswith("(") and s.endswith(")")) or s.lstrip().startswith("-")
+    s = re.sub(r"[^\d.,]", "", s)  # mantém só dígitos, ponto e vírgula
+    if not s:
+        return 0.0
+    last_c, last_d = s.rfind(","), s.rfind(".")
+    if last_c >= 0 and last_d >= 0:
+        if last_c > last_d:                          # vírgula decimal (BR): 1.234,56
+            s = s.replace(".", "").replace(",", ".")
+        else:                                        # ponto decimal (US): 1,234.56
+            s = s.replace(",", "")
+    elif last_c >= 0:                                # só vírgula → decimal BR
         s = s.replace(".", "").replace(",", ".")
-    else:
-        s = s.replace(",", ".")
+    elif "." in s and re.fullmatch(r"\d{1,3}(\.\d{3})+", s):
+        s = s.replace(".", "")                       # ponto como milhar BR: 2.500
     try:
-        return float(s)
+        val = float(s)
     except ValueError:
         return 0.0
+    return -val if neg else val
 
 
 # ── Carregamento de arquivo ────────────────────────────────────────────────────
@@ -659,10 +672,36 @@ def _split_side_by_side_blocks(df_raw: pd.DataFrame) -> pd.DataFrame:
     return stacked
 
 
+_SUMMARY_WORDS = {"total", "totais", "subtotal", "soma", "somatorio", "geral", "media", "media:"}
+
+
+def _drop_summary_rows(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    """Remove linhas de fechamento (TOTAL/SOMA/SUBTOTAL) que não são vendas.
+    Conservador: só dropa se a 1ª palavra de alguma célula é de soma E a linha não tem telefone."""
+    if len(df) == 0:
+        return df, 0
+
+    def _is_summary(row) -> bool:
+        cells = [v for v in row if pd.notna(v) and str(v).strip() != ""]
+        if not cells or any(_looks_like_phone(v) for v in cells):
+            return False
+        for v in cells:
+            words = re.sub(r"[^a-z ]", " ", _normalize(str(v))).split()
+            if words and words[0] in _SUMMARY_WORDS:
+                return True
+        return False
+
+    mask = df.apply(_is_summary, axis=1)
+    n = int(mask.sum())
+    if n:
+        return df[~mask].reset_index(drop=True), n
+    return df, 0
+
+
 def _frame_from_raw(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, int, list]:
     """
     Recebe o DataFrame bruto (lido com header=None) e devolve (df tratado, hrow, notas).
-    Trata: blocos lado a lado, detecção de cabeçalho e planilha sem cabeçalho.
+    Trata: blocos lado a lado, detecção de cabeçalho, planilha sem cabeçalho e linhas de soma.
     """
     notes: list = []
     df_raw = _split_side_by_side_blocks(df_raw)
@@ -684,6 +723,9 @@ def _frame_from_raw(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, int, list]:
             for i, v in enumerate(header_vals)
         ]
     df = df.dropna(how="all").reset_index(drop=True)
+    df, n_sum = _drop_summary_rows(df)
+    if n_sum:
+        notes.append(f"{n_sum} linha(s) de total/soma ignorada(s) (não são vendas).")
     return df, hrow, notes
 
 
@@ -900,7 +942,9 @@ def _is_doc_col(col_name: str) -> bool:
 
 
 # Token de telefone BR embutido em texto: (DDI) (DDD) 9? XXXX(-)XXXX
-_PHONE_TOKEN_RE = re.compile(r"(?:\+?55[\s.\-]?)?\(?\d{2}\)?[\s.\-]?9?\d{4}[\s.\-]?\d{4}")
+# Token de telefone BR embutido em texto. O "(?:9[\s.\-]?)?" cobre o 9 do celular
+# isolado por separador — ex.: "(11) 9 8888-7777" / "11 9 8888-7777".
+_PHONE_TOKEN_RE = re.compile(r"(?:\+?55[\s.\-]?)?\(?\d{2}\)?[\s.\-]?(?:9[\s.\-]?)?\d{4}[\s.\-]?\d{4}")
 
 
 def _phone_keys_in_cell(raw, strict: bool = False) -> list:
@@ -920,7 +964,9 @@ def _phone_keys_in_cell(raw, strict: bool = False) -> list:
         if k[1] and k[1] not in seen:
             keys.append(k)
             seen.add(k[1])
-    if not keys and not strict:  # nenhum token reconhecido — tenta a célula inteira
+    # Fallback célula inteira (ex.: formato que o regex não tokenizou). Em strict
+    # só aceita se a célula inteira parece telefone real — evita pegar lixo.
+    if not keys and (not strict or _looks_like_phone(s)):
         k = phone_key(s)
         if k[1]:
             keys.append(k)
@@ -985,6 +1031,7 @@ def run_procv(
     traffic_keyword: str,
     sales_name_col: Optional[str] = None,
     kommo_name_col: Optional[str] = None,
+    traffic_exclude: str = "",
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Retorna: (vendas_tratada, kommo_tratada, resultado_trafego, resultado_completo)
@@ -1044,7 +1091,7 @@ def run_procv(
     for i, (_, kr) in enumerate(dk.iterrows()):
         k8_primary = kr.get("Tel_8dig_Kommo", "")
         tag_raw = "" if pd.isna(kr.get(kommo_tag_col, np.nan)) else str(kr[kommo_tag_col])
-        is_traffic = _tag_contains(tag_raw, traffic_keyword)
+        is_traffic = _tag_matches(tag_raw, traffic_keyword, traffic_exclude)
 
         # Match por telefone DDD-aware: primeira chave (col principal → alternativas) que casa
         match_reason = ""
@@ -1153,11 +1200,19 @@ def _normalize(s: str) -> str:
             .replace("ú", "u").replace("ü", "u").replace("õ", "o"))
 
 
-def _tag_contains(tag_text, keyword) -> bool:
-    """True se keyword aparece em tag_text, ignorando acentos, maiúsculas e espaços nas pontas.
-    É o que a UI promete ('a busca ignora maiúsculas/minúsculas e acentos')."""
-    kw = _normalize(str(keyword)).strip()
-    return bool(kw) and kw in _normalize(str(tag_text))
+def _tag_matches(tag_text, include, exclude="") -> bool:
+    """True se a tag bate com QUALQUER palavra de `include` (separadas por , ou ;)
+    E não bate com NENHUMA palavra de `exclude`. Ignora acentos e maiúsculas.
+
+    Ex.: include='trafego, pago, ads' casa qualquer uma das três;
+         include='trafego', exclude='organico' casa 'Tráfego Pago' mas não 'Tráfego Orgânico'.
+    """
+    norm = _normalize(str(tag_text))
+    incs = [k.strip() for k in re.split(r"[;,]", _normalize(str(include))) if k.strip()]
+    if not incs or not any(k in norm for k in incs):
+        return False
+    excs = [k.strip() for k in re.split(r"[;,]", _normalize(str(exclude))) if k.strip()]
+    return not any(k in norm for k in excs)
 
 
 _NAME_STOP = {"de", "da", "do", "dos", "das", "e", "di", "du", "van", "von", "el", "la"}
@@ -1259,8 +1314,8 @@ def parse_date(value) -> Optional[datetime]:
             except ValueError:
                 pass
 
-    # "DD de month_name de YYYY" / "DD month_name YYYY"
-    m = re.match(r"^(\d{1,2})\s+(?:de\s+)?([a-z]+)(?:\s+(?:de\s+)?(\d{2,4}))?$", sn)
+    # "DD de month_name de YYYY" / "DD month_name YYYY" / "22-abr-2026" / "22/abril/26"
+    m = re.match(r"^(\d{1,2})[\s/\-]+(?:de[\s/\-]+)?([a-z]+)(?:[\s/\-]+(?:de[\s/\-]+)?(\d{2,4}))?$", sn)
     if m:
         month = _MONTH_MAP.get(m.group(2))
         if month:
@@ -1346,6 +1401,7 @@ def run_disparo(
     window_days: int = 30,
     sales_name_col: Optional[str] = None,
     kommo_name_col: Optional[str] = None,
+    disparo_exclude: str = "",
 ) -> pd.DataFrame:
     """
     Filtra leads de disparo do Kommo pela tag e cruza com vendas.
@@ -1354,7 +1410,7 @@ def run_disparo(
     """
     # Filtra leads de disparo no Kommo (ignora acentos e maiúsculas)
     disparo_mask = df_kommo[kommo_tag_col].fillna("").astype(str).apply(
-        lambda t: _tag_contains(t, disparo_keyword)
+        lambda t: _tag_matches(t, disparo_keyword, disparo_exclude)
     )
     df_disp_leads = df_kommo[disparo_mask].copy()
 
@@ -1451,6 +1507,7 @@ def run_disparo(
         match_reason = ""
         matched_sub8 = ""
         matched_ddd = None
+        any_phone_sale = False  # o telefone do lead bate com alguma venda?
 
         # ── Match por telefone DDD-aware ──────────────────────────────────
         for key, k_col in row_keys:
@@ -1466,7 +1523,10 @@ def run_disparo(
                 _mr = f"Telefone (vendas: {s_col})"
             else:
                 _mr = f"Col. alt. Kommo: {k_col} → vendas: {s_col}"
-            for sale in resolve_phone_all(sales_lookup, key):
+            sales_for_key = resolve_phone_all(sales_lookup, key)
+            if sales_for_key:
+                any_phone_sale = True
+            for sale in sales_for_key:
                 if _is_real_datetime(disp_date) and sales_date_col:
                     sale_dt = sale.get("_dt_venda")
                     if _is_real_datetime(sale_dt):
@@ -1551,7 +1611,11 @@ def run_disparo(
                 row_out[f"[Venda] {col}"] = matched_sale.get(col, "")
         else:
             row_out["Venda_Confirmada"] = "NÃO"
-            row_out["Criterio_Match"] = ""
+            # Motivo da não-conversão — ajuda a entender o resultado sem adivinhar
+            if any_phone_sale:
+                row_out["Criterio_Match"] = "Telefone bate, mas a venda ficou fora da janela (antes do disparo ou +30 dias)"
+            else:
+                row_out["Criterio_Match"] = "Telefone do lead não encontrado nas vendas"
             if sales_date_col:
                 row_out["Data_Venda"] = ""
                 if disp_date:
@@ -1574,6 +1638,67 @@ def run_disparo(
         df_sem_tel = df_res[~mask_tel]
         df_res = pd.concat([df_com_tel, df_sem_tel], ignore_index=True)
     return df_res
+
+
+# ── Breakdown por aba/mês ───────────────────────────────────────────────────────
+
+def run_breakdown_by_sheet(
+    df_sales: pd.DataFrame,
+    sales_phone_col: str,
+    df_kommo: pd.DataFrame,
+    kommo_phone_col: str,
+    kommo_tag_col: str,
+    traffic_keyword: str,
+    *,
+    sales_date_col: Optional[str] = None,
+    disparo_keyword: Optional[str] = None,
+    kommo_date_col: Optional[str] = None,
+    sales_name_col: Optional[str] = None,
+    kommo_name_col: Optional[str] = None,
+    df_kommo_disp: Optional[pd.DataFrame] = None,
+    kommo_disp_phone_col: Optional[str] = None,
+    kommo_disp_tag_col: Optional[str] = None,
+    traffic_exclude: str = "",
+    disparo_exclude: str = "",
+) -> Optional[pd.DataFrame]:
+    """
+    Cruza UM Kommo contra CADA aba (mês) da planilha de vendas, separadamente.
+    É o cenário "planilha de 8 meses × 1 Kommo → vendas do tráfego mês a mês".
+
+    A deduplicação acontece DENTRO de cada mês — um comprador recorrente conta
+    em cada mês em que comprou (ao contrário do total combinado, que o conta 1×).
+
+    Retorna um DataFrame (uma linha por aba) ou None se a planilha tem 1 aba só.
+    """
+    if "_Planilha" not in df_sales.columns:
+        return None
+
+    rows = []
+    for sheet, grp in df_sales.groupby("_Planilha", sort=False):
+        g = grp.reset_index(drop=True)
+        _, _, traf, full = run_procv(
+            g, sales_phone_col, df_kommo, kommo_phone_col, kommo_tag_col, traffic_keyword,
+            sales_name_col=sales_name_col, kommo_name_col=kommo_name_col,
+            traffic_exclude=traffic_exclude,
+        )
+        row = {
+            "Mês / Aba": sheet,
+            "Vendas no mês": len(g),
+            "Vendas de Tráfego": len(traf),
+        }
+        if disparo_keyword and disparo_keyword.strip():
+            kd = df_kommo_disp if df_kommo_disp is not None else df_kommo
+            kp = kommo_disp_phone_col or kommo_phone_col
+            kt = kommo_disp_tag_col or kommo_tag_col
+            disp = run_disparo(
+                g, sales_phone_col, sales_date_col, kd, kp, kt, disparo_keyword, kommo_date_col,
+                sales_name_col=sales_name_col, kommo_name_col=kommo_name_col,
+                disparo_exclude=disparo_exclude,
+            )
+            row["Vendas de Disparo"] = int((disp["Venda_Confirmada"] == "SIM").sum()) if len(disp) else 0
+        rows.append(row)
+
+    return pd.DataFrame(rows) if rows else None
 
 
 # ── Análise de Duplicatas ──────────────────────────────────────────────────────
@@ -2019,6 +2144,7 @@ def build_excel(
     df_disparo_result: Optional[pd.DataFrame] = None,
     df_dup_analysis: Optional[pd.DataFrame] = None,
     sales_value_col: Optional[str] = None,
+    df_breakdown: Optional[pd.DataFrame] = None,
 ) -> bytes:
     wb = Workbook()
 
@@ -2099,6 +2225,11 @@ def build_excel(
     # Coluna de valor renomeada (para _add_total_row)
     _vcol = f"[Venda] {sales_value_col}" if sales_value_col else ""
 
+    # ── Aba: Mês a Mês (por aba) ──────────────────────────────────────
+    if df_breakdown is not None and len(df_breakdown) > 0:
+        ws_bd = wb.create_sheet("📅 Mês a Mês")
+        _write_sheet(ws_bd, df_breakdown, "VENDAS POR MÊS / ABA (Kommo × cada aba)", "7B2FBE")
+
     # ── Aba 3: Vendas — Tráfego ───────────────────────────────────────
     ws3 = wb.create_sheet("✅ Vendas — Tráfego")
     if len(df_result) == 0:
@@ -2172,24 +2303,22 @@ def build_excel(
 
 # ── Interface ──────────────────────────────────────────────────────────────────
 
-_PHONE_NAME_KWS = ["telefone", "celular", "whatsapp", "wpp", "fone", "phone",
-                   "mobile", "cel", "tel", "contato", "numero", "número"]
-
-
-def _phone_col_confidence(df: pd.DataFrame, col: Optional[str]) -> str:
-    """Confiança da auto-detecção de telefone: alta / média / baixa."""
+def _phone_preview(df: pd.DataFrame, col: Optional[str], is_auto: bool = False) -> str:
+    """Prévia da coluna de telefone ANTES de rodar: quantos valores parecem telefone.
+    Avisa quando a coluna provavelmente está errada (preview/guardrail)."""
     if col is None or col not in df.columns:
         return ""
-    sample = df[col].dropna().head(30)
-    if len(sample) == 0:
-        return "baixa"
-    ratio = sample.apply(_looks_like_phone).sum() / len(sample)
-    name_match = _match_keywords(col, _PHONE_NAME_KWS)
-    if name_match and ratio >= 0.6:
-        return "alta"
-    if name_match or ratio >= 0.6:
-        return "média"
-    return "baixa"
+    sample = df[col].dropna().astype(str).head(50)
+    n = len(sample)
+    if n == 0:
+        return "⚠️ coluna sem dados"
+    hits = int(sample.apply(_looks_like_phone).sum())
+    prefix = "✨ Auto-detectado · " if is_auto else ""
+    if hits / n >= 0.6:
+        return f"{prefix}✅ {hits}/{n} amostrados parecem telefone"
+    if hits / n >= 0.2:
+        return f"{prefix}⚠️ só {hits}/{n} parecem telefone — confira a coluna"
+    return f"{prefix}⚠️ {hits}/{n} parecem telefone — provavelmente NÃO é a coluna certa"
 
 
 def _show_treatment_notes(df: Optional[pd.DataFrame], origem: str) -> None:
@@ -2359,9 +2488,7 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                  "A comparação casa números com DDD, sem DDD, com ou sem o 9 — mas exige "
                  "que o DDD bata quando os dois lados têm, evitando juntar cidades diferentes.",
         )
-        if auto_sp == sales_phone_col:
-            _conf = _phone_col_confidence(df_sales_raw, auto_sp)
-            st.caption(f"✨ Auto-detectado · confiança {_conf}")
+        st.caption(_phone_preview(df_sales_raw, sales_phone_col, auto_sp == sales_phone_col))
     with c2:
         kommo_phone_col = st.selectbox(
             "Coluna de telefone — Kommo",
@@ -2370,9 +2497,7 @@ if df_sales_raw is not None and df_kommo_raw is not None:
             help="Coluna do Kommo com o telefone do lead (geralmente 'Celular'). "
                  "Mesmo que o número esteja em outra coluna, a ferramenta testa todas automaticamente.",
         )
-        if auto_kp == kommo_phone_col:
-            _confk = _phone_col_confidence(df_kommo_raw, auto_kp)
-            st.caption(f"✨ Auto-detectado · confiança {_confk}")
+        st.caption(_phone_preview(df_kommo_raw, kommo_phone_col, auto_kp == kommo_phone_col))
     with c3:
         kommo_tag_col = st.selectbox(
             "Coluna de tags — Kommo",
@@ -2388,10 +2513,16 @@ if df_sales_raw is not None and df_kommo_raw is not None:
             "Tag de tráfego — palavra-chave",
             value="trafego",
             placeholder="Cole aqui como está no Kommo...",
-            help="Cole aqui um trecho da tag de tráfego exatamente como aparece no Kommo. "
-                 "Não precisa ser a tag completa — um pedaço já resolve. "
-                 "A busca ignora maiúsculas/minúsculas e acentos. "
-                 "Exemplos: 'trafego', 'pago', 'ads', 'lead trafego'.",
+            help="Trecho da tag de tráfego como aparece no Kommo. Ignora maiúsculas e acentos. "
+                 "Pode pôr VÁRIAS separadas por vírgula (qualquer uma serve): 'trafego, pago, ads'.",
+        )
+        traffic_exclude = st.text_input(
+            "Excluir tags com *(opcional)*",
+            value="",
+            placeholder="ex: organico",
+            help="Se preencher, leads cuja tag contém estas palavras NÃO contam como tráfego. "
+                 "Útil pra separar 'Tráfego Pago' de 'Tráfego Orgânico'. Várias separadas por vírgula.",
+            key="traffic_exclude",
         )
 
     # Colunas de nome (fallback quando telefone não bate)
@@ -2479,12 +2610,17 @@ if df_sales_raw is not None and df_kommo_raw is not None:
             "Tag de disparo — palavra-chave",
             value="disparo",
             placeholder="Cole aqui como está a tag no Kommo...",
-            help="Cole aqui um trecho da tag de disparo exatamente como aparece no Kommo. "
-                 "Não precisa ser a tag completa — um pedaço já basta. "
-                 "Exemplos: se no Kommo a tag for 'recebeu disparo dia das mães', "
-                 "pode digitar apenas 'disparo' ou 'recebeu disparo' ou 'dia das mães'. "
-                 "A busca é parcial e ignora maiúsculas/minúsculas.",
+            help="Trecho da tag de disparo como aparece no Kommo. Ignora maiúsculas e acentos. "
+                 "Pode pôr várias separadas por vírgula (qualquer uma serve). "
+                 "Ex.: 'disparo', 'recebeu disparo', 'dia das mães'.",
             key="disparo_kw",
+        )
+        disparo_exclude = st.text_input(
+            "Excluir tags com *(opcional)*",
+            value="",
+            placeholder="ex: teste",
+            help="Leads cuja tag contém estas palavras NÃO contam como disparo. Várias por vírgula.",
+            key="disparo_exclude",
         )
     with e2:
         kommo_date_opts = [none_opt] + list(df_kommo_disp.columns)
@@ -2545,6 +2681,7 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                 traffic_keyword,
                 sales_name_col=sales_name_col,
                 kommo_name_col=kommo_name_col,
+                traffic_exclude=traffic_exclude,
             )
 
             # Compradores únicos (deduplicado por Tel_8dig no run_procv)
@@ -2559,6 +2696,25 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                     disparo_keyword, kommo_date_col,
                     sales_name_col=sales_name_col,
                     kommo_name_col=kommo_name_col,
+                    disparo_exclude=disparo_exclude,
+                )
+
+            # ── Breakdown mês a mês (quando a planilha de vendas tem várias abas) ──
+            df_breakdown = None
+            if "_Planilha" in df_sales_raw.columns:
+                progress.progress(70, text="Cruzando o Kommo com cada aba/mês...")
+                df_breakdown = run_breakdown_by_sheet(
+                    df_sales_raw, sales_phone_col, df_kommo_raw, kommo_phone_col, kommo_tag_col,
+                    traffic_keyword,
+                    sales_date_col=sales_date_col,
+                    disparo_keyword=disparo_keyword if (considerar_disparo and disparo_keyword.strip()) else None,
+                    kommo_date_col=kommo_date_col,
+                    sales_name_col=sales_name_col, kommo_name_col=kommo_name_col,
+                    df_kommo_disp=df_kommo_disparo_raw,
+                    kommo_disp_phone_col=kommo_disp_phone_col,
+                    kommo_disp_tag_col=kommo_disp_tag_col,
+                    traffic_exclude=traffic_exclude,
+                    disparo_exclude=disparo_exclude,
                 )
 
             # ── Atribuição: sobreposição tráfego × disparo ────────────────────
@@ -2602,7 +2758,7 @@ if df_sales_raw is not None and df_kommo_raw is not None:
 
             progress.progress(90, text="Gerando relatório Excel...")
             excel_bytes = build_excel(ds_t, dk_t, df_result, df_full, df_disparo_result, df_dup_analysis,
-                                       sales_value_col=sales_value_col)
+                                       sales_value_col=sales_value_col, df_breakdown=df_breakdown)
             st.session_state["excel_bytes"] = excel_bytes
 
             progress.progress(100, text="Concluído!")
@@ -2744,6 +2900,22 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                     f"Detalhes na coluna **'Origem da Venda'** do Excel."
                 )
 
+            # ── Mês a mês (quando a planilha de vendas tem várias abas) ──────────
+            if df_breakdown is not None and len(df_breakdown) > 0:
+                st.divider()
+                st.markdown('<div class="step-wrap"><div class="step-num">📅</div><div class="step-text">Mês a Mês (por aba)</div></div>', unsafe_allow_html=True)
+                st.caption(
+                    "Cada aba da planilha de vendas foi cruzada com o Kommo **separadamente**. "
+                    "Um comprador recorrente conta em **cada mês** que comprou — diferente do total "
+                    "acima, que conta compradores únicos no período."
+                )
+                st.dataframe(df_breakdown, use_container_width=True, hide_index=True)
+                _tot_t = int(df_breakdown["Vendas de Tráfego"].sum())
+                _msg = f"**{_tot_t}** vendas de tráfego somando os meses"
+                if "Vendas de Disparo" in df_breakdown.columns:
+                    _msg += f" · **{int(df_breakdown['Vendas de Disparo'].sum())}** de disparo"
+                st.success(_msg + ". Veja a aba **📅 Mês a Mês** do Excel.")
+
             # ── Qualidade dos dados de vendas ───────────────────────────────────
             st.divider()
             st.markdown('<div class="step-wrap"><div class="step-num">🔍</div><div class="step-text">Qualidade dos Dados</div></div>', unsafe_allow_html=True)
@@ -2784,10 +2956,16 @@ if df_sales_raw is not None and df_kommo_raw is not None:
 
             st.divider()
 
-        except Exception:
+        except Exception as e:
             progress.empty()
-            st.error("Erro ao processar. Detalhes abaixo:")
-            st.code(traceback.format_exc())
+            st.error(
+                "⚠️ Não consegui concluir a análise. As causas mais comuns são: "
+                "coluna de **telefone** ou de **tags** apontada errada, ou uma planilha "
+                "num formato inesperado. Confira as colunas selecionadas acima e tente de novo."
+            )
+            st.caption(f"Detalhe técnico: {type(e).__name__}: {e}")
+            with st.expander("🔧 Detalhes técnicos (para suporte)"):
+                st.code(traceback.format_exc())
 
     # ── Download — fora do bloco de processamento para persistir entre reruns ──
     if "excel_bytes" in st.session_state:

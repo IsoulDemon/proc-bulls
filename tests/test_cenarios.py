@@ -486,10 +486,58 @@ def test_adversarial():
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# L. Tags avançadas (OR / excluir) + motivo no disparo
+# ════════════════════════════════════════════════════════════════════════════
+def test_tags_avancado():
+    cat("L. Tags OR/excluir + motivo no disparo")
+
+    # _tag_matches: OR e exclusão
+    ck("OR: 'pago' casa 'trafego, pago, ads'", app._tag_matches("Tráfego Pago", "organico, pago, ads"))
+    ck("OR: nenhuma casa → False", not app._tag_matches("Lead Frio", "trafego, pago, ads"))
+    ck("excluir: 'trafego' mas não 'organico'",
+       app._tag_matches("Tráfego Pago", "trafego", "organico"))
+    ck("excluir bloqueia 'Tráfego Orgânico'",
+       not app._tag_matches("Tráfego Orgânico", "trafego", "organico"))
+
+    # run_procv com múltiplas keywords (OR)
+    sales = pd.DataFrame({"Nome": ["A", "B"], "Telefone": ["11988887777", "21999990000"], "Valor": ["1", "2"]})
+    kommo = pd.DataFrame({"Celular": ["11988887777", "21999990000"], "Tags": ["Lead Ads", "Pago Meta"]})
+    _, _, traf, _ = app.run_procv(sales, "Telefone", kommo, "Celular", "Tags", "ads, pago")
+    ck("run_procv casa qualquer das keywords (ads/pago)", len(traf) == 2, f"traf={len(traf)}")
+
+    # run_procv com exclusão (orgânico não conta)
+    kommo2 = pd.DataFrame({"Celular": ["11988887777", "21999990000"],
+                           "Tags": ["Tráfego Pago", "Tráfego Orgânico"]})
+    _, _, traf2, _ = app.run_procv(sales, "Telefone", kommo2, "Celular", "Tags", "trafego", traffic_exclude="organico")
+    ck("run_procv exclui 'orgânico' (só 1 conversão)", len(traf2) == 1, f"traf={len(traf2)}")
+
+    # motivo por linha no disparo: telefone bate mas venda antes do disparo
+    sd = pd.DataFrame({"Nome": ["C"], "Telefone": ["66999873776"], "Data": ["10/04/2026"], "Valor": ["1"]})
+    kd = pd.DataFrame({"Celular": ["66999873776"], "Tags": ["disparo 22/04"]})
+    r = app.run_disparo(sd, "Telefone", "Data", kd, "Celular", "Tags", "disparo", None)
+    motivo = r.iloc[0]["Criterio_Match"] if len(r) else ""
+    ck("motivo: 'fora da janela' quando venda foi antes do disparo", "fora da janela" in motivo, motivo)
+
+    # motivo: telefone não encontrado
+    sd2 = pd.DataFrame({"Nome": ["X"], "Telefone": ["11111111111"], "Data": ["25/04/2026"], "Valor": ["1"]})
+    r2 = app.run_disparo(sd2, "Telefone", "Data", kd, "Celular", "Tags", "disparo", None)
+    motivo2 = r2.iloc[0]["Criterio_Match"] if len(r2) else ""
+    ck("motivo: 'não encontrado' quando telefone não bate", "não encontrado" in motivo2, motivo2)
+
+    # _phone_preview avisa coluna errada
+    df_cpf = pd.DataFrame({"Doc": ["123.456.789-00", "987.654.321-11", "111.222.333-96"]})
+    ck("preview avisa que coluna NÃO é telefone", "NÃO" in app._phone_preview(df_cpf, "Doc"),
+       app._phone_preview(df_cpf, "Doc"))
+    df_tel = pd.DataFrame({"Cel": ["11988887777", "21999990000", "31988887777"]})
+    ck("preview confirma coluna de telefone", "✅" in app._phone_preview(df_tel, "Cel"),
+       app._phone_preview(df_tel, "Cel"))
+
+
+# ════════════════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
     for fn in (test_telefone, test_discriminacao, test_datas, test_valores,
                test_ingestao, test_procv, test_disparo, test_duplicatas,
-               test_end_to_end, test_adversarial, test_performance):
+               test_end_to_end, test_adversarial, test_tags_avancado, test_performance):
         try:
             fn()
         except Exception as e:
