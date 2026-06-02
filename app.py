@@ -920,6 +920,58 @@ def load_file_multisheet(
     return combined, sheet_info
 
 
+def _unify_key_cols(frames: list, detector) -> list:
+    """Quando funis nomeiam a MESMA coluna-chave de formas diferentes (ex.: 'Celular'
+    num funil e 'Telefone' noutro), renomeia todas para um nome comum, para que o
+    cruzamento enxergue a coluna em todos. Não mexe quando já estão consistentes."""
+    detected = [detector(d) for d in frames]
+    present = [c for c in detected if c]
+    if len(set(present)) <= 1:
+        return frames  # todos iguais (ou nenhum) — nada a unificar
+    target = present[0]  # usa o nome do primeiro funil que tem a coluna
+    out = []
+    for d, col in zip(frames, detected):
+        if col and col != target and target not in d.columns:
+            d = d.rename(columns={col: target})
+        out.append(d)
+    return out
+
+
+def combine_kommo_sources(dfs: list, names: Optional[list] = None) -> Optional[pd.DataFrame]:
+    """
+    Combina vários exports do Kommo (ex.: um por funil de venda) num só DataFrame.
+    Unifica as colunas de telefone e de tags (nomes podem variar entre funis),
+    alinha o resto e marca a origem em '_Funil'.
+
+    Um lead pode aparecer em mais de um funil; telefones de QUALQUER funil entram
+    no cruzamento e a deduplicação por comprador acontece depois (no run_procv),
+    então não há dupla contagem de conversões.
+    """
+    pairs = [(d, (names[i] if names else f"Funil {i+1}"))
+             for i, d in enumerate(dfs) if d is not None and len(d) > 0]
+    if not pairs:
+        return None
+    if len(pairs) == 1:
+        return pairs[0][0]
+
+    frames = [d for d, _ in pairs]
+    frames = _unify_key_cols(frames, detect_phone_col)
+    frames = _unify_key_cols(frames, detect_tag_col)
+    aligned, _ = _align_columns(frames)
+    out = []
+    notes = []
+    for (d_orig, nm), d in zip(pairs, aligned):
+        d = d.copy()
+        d.insert(0, "_Funil", nm)
+        out.append(d)
+        notes.append(f"{nm}: {len(d):,} leads")
+    combined = _normalize_cols(pd.concat(out, ignore_index=True))
+    combined.attrs["treatment_notes"] = (
+        [f"{len(pairs)} arquivos do Kommo combinados (funis): " + " · ".join(notes)]
+    )
+    return combined
+
+
 # ── Lógica principal do PROCV ──────────────────────────────────────────────────
 
 def _is_phone_col(col_data: pd.Series) -> bool:
@@ -2333,6 +2385,20 @@ def _show_treatment_notes(df: Optional[pd.DataFrame], origem: str) -> None:
             st.markdown(f"• {n}")
 
 
+def _load_multi(files) -> Optional[pd.DataFrame]:
+    """Carrega e COMBINA uma lista de arquivos do Kommo (ex.: vários funis).
+    Cada arquivo é lido por inteiro (todas as abas) e depois combinado num só."""
+    dfs, names = [], []
+    for f in files:
+        b = f.read()
+        sheets = _get_sheets_cached(b, f.name)
+        df, _info = _load_cached(b, f.name, tuple(sheets or ["__csv__"]))
+        if df is not None and len(df) > 0:
+            dfs.append(df)
+            names.append(f.name)
+    return combine_kommo_sources(dfs, names)
+
+
 st.markdown("""
 <div class="hero-wrap">
   <div class="hero-badge">Aure Digital</div>
@@ -2397,69 +2463,45 @@ with col_left:
                     st.dataframe(df_sales_raw.head(6), use_container_width=True)
 
 with col_right:
-    st.markdown("#### 🗂️ Planilha do Kommo")
-    kommo_file = st.file_uploader(
-        "Arraste ou clique (Excel ou CSV)",
+    st.markdown("#### 🗂️ Planilha(s) do Kommo")
+    kommo_files = st.file_uploader(
+        "Arraste ou clique — pode jogar VÁRIOS arquivos (um por funil)",
         type=["xlsx", "xls", "csv", "xlsm"],
         key="kommo_upload",
-        help="Export do Kommo CRM com leads, telefones e tags",
+        accept_multiple_files=True,
+        help="Export(s) do Kommo CRM com leads, telefones e tags. "
+             "Se você tem vários funis, baixe um arquivo de cada e solte todos aqui — "
+             "a ferramenta junta tudo num só e cruza com as vendas.",
     )
     df_kommo_raw: Optional[pd.DataFrame] = None
-    if kommo_file:
-        kommo_bytes = kommo_file.read()  # lê UMA vez aqui
-        kommo_sheets = _get_sheets_cached(kommo_bytes, kommo_file.name)
-        selected_kommo_sheets = kommo_sheets
-
-        if len(kommo_sheets) > 1:
-            st.caption(f"📂 {len(kommo_sheets)} planilhas encontradas neste arquivo")
-            selected_kommo_sheets = st.multiselect(
-                "Selecione as planilhas a usar:",
-                options=kommo_sheets,
-                default=kommo_sheets,
-                key="kommo_sheets_select",
-            )
-            if not selected_kommo_sheets:
-                st.warning("Selecione ao menos uma planilha.")
-
-        if selected_kommo_sheets or not kommo_sheets:
-            df_kommo_raw, kommo_info = _load_cached(
-                kommo_bytes, kommo_file.name, tuple(selected_kommo_sheets or ["__csv__"])
-            )
-            if df_kommo_raw is not None:
-                for sheet, hrow in kommo_info.items():
-                    if hrow > 0:
-                        st.info(f"📋 '{sheet}': cabeçalho detectado na linha {hrow + 1} — título(s) anteriores ignorados.")
+    if kommo_files:
+        df_kommo_raw = _load_multi(kommo_files)
+        if df_kommo_raw is not None:
+            if len(kommo_files) > 1:
+                st.success(f"✅ {len(kommo_files)} funis combinados · {len(df_kommo_raw):,} leads · {len(df_kommo_raw.columns)} colunas")
+            else:
                 st.success(f"✅ {len(df_kommo_raw):,} linhas · {len(df_kommo_raw.columns)} colunas")
-                _show_treatment_notes(df_kommo_raw, "Kommo")
-                with st.expander("Prévia"):
-                    st.dataframe(df_kommo_raw.head(6), use_container_width=True)
+            _show_treatment_notes(df_kommo_raw, "Kommo")
+            with st.expander("Prévia"):
+                st.dataframe(df_kommo_raw.head(6), use_container_width=True)
 
-st.markdown("#### 📣 Planilha do Kommo — Disparo *(opcional, se arquivo separado do tráfego)*")
-kommo_disparo_file = st.file_uploader(
-    "Se o Kommo de disparo é um arquivo diferente do de tráfego, faça upload aqui",
+st.markdown("#### 📣 Planilha(s) do Kommo — Disparo *(opcional, se for arquivo separado do tráfego)*")
+kommo_disparo_files = st.file_uploader(
+    "Se o Kommo de disparo é separado do de tráfego, solte aqui (pode ser mais de um)",
     type=["xlsx", "xls", "csv", "xlsm"],
     key="kommo_disparo_upload",
-    help="Opcional. Se não carregar, o arquivo Kommo principal será usado para ambos tráfego e disparo.",
+    accept_multiple_files=True,
+    help="Opcional. Se não carregar, o(s) arquivo(s) Kommo principal(is) servem para tráfego e disparo.",
 )
 df_kommo_disparo_raw: Optional[pd.DataFrame] = None
-if kommo_disparo_file:
-    kd_bytes = kommo_disparo_file.read()  # lê UMA vez aqui
-    kd_sheets = _get_sheets_cached(kd_bytes, kommo_disparo_file.name)
-    selected_kd_sheets = kd_sheets
-    if len(kd_sheets) > 1:
-        selected_kd_sheets = st.multiselect(
-            "Planilhas do Kommo Disparo:",
-            options=kd_sheets, default=kd_sheets, key="kommo_disp_sheets",
-        )
-    if selected_kd_sheets or not kd_sheets:
-        df_kommo_disparo_raw, kd_info = _load_cached(
-            kd_bytes, kommo_disparo_file.name, tuple(selected_kd_sheets or ["__csv__"])
-        )
-        if df_kommo_disparo_raw is not None:
-            st.success(f"✅ Kommo Disparo: {len(df_kommo_disparo_raw):,} linhas · {len(df_kommo_disparo_raw.columns)} colunas")
-            _show_treatment_notes(df_kommo_disparo_raw, "Kommo Disparo")
-            with st.expander("Prévia"):
-                st.dataframe(df_kommo_disparo_raw.head(6), use_container_width=True)
+if kommo_disparo_files:
+    df_kommo_disparo_raw = _load_multi(kommo_disparo_files)
+    if df_kommo_disparo_raw is not None:
+        _nf = len(kommo_disparo_files)
+        st.success(f"✅ Kommo Disparo: {('%d funis · ' % _nf) if _nf > 1 else ''}{len(df_kommo_disparo_raw):,} leads · {len(df_kommo_disparo_raw.columns)} colunas")
+        _show_treatment_notes(df_kommo_disparo_raw, "Kommo Disparo")
+        with st.expander("Prévia"):
+            st.dataframe(df_kommo_disparo_raw.head(6), use_container_width=True)
 
 st.divider()
 

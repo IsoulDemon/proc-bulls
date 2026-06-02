@@ -33,3 +33,6 @@ jobs:
 
       - name: Multi-mês / multi-aba
         run: python tests/test_multimes.py
+
+      - name: Multi-funil (vários Kommo)
+        run: python tests/test_multifunil.py
