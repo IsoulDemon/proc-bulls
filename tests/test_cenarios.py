@@ -421,10 +421,17 @@ def test_performance():
         "Tags": ["trafego pago"] * (n // 2),
     })
     t0 = time.time()
-    _, _, traf, _ = app.run_procv(sales, "Telefone", kommo, "Celular", "Tags", "trafego")
+    ds, dk, traf, full = app.run_procv(sales, "Telefone", kommo, "Celular", "Tags", "trafego")
     dt = time.time() - t0
     ck(f"J1 run_procv {n}x{n//2} < 25s", dt < 25, f"{dt:.2f}s")
     ck("J1 metade dos leads convertida", abs(len(traf) - n // 2) <= 2, f"traf={len(traf)}")
+
+    # J2 — regressão de performance do Excel (já travou em 150s+ por estilizar célula
+    # a célula). Com 5000 leads tem que sair rápido.
+    t0 = time.time()
+    xls = app.build_excel(ds, dk, traf, full, None, None)
+    dt = time.time() - t0
+    ck(f"J2 build_excel 5000 leads < 20s", dt < 20 and len(xls) > 2000, f"{dt:.2f}s")
 
 
 # ════════════════════════════════════════════════════════════════════════════

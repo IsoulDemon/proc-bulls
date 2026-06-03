@@ -1138,11 +1138,20 @@ def run_procv(
                 if all(key[1] != k[1] for k, _ in kommo_row_keys[i]):
                     kommo_row_keys[i].append((key, col))
 
+    # Pré-extrai colunas como listas — iterar listas é MUITO mais rápido que iterrows()
+    _k8_col = dk["Tel_8dig_Kommo"].tolist()
+    _tag_col = dk[kommo_tag_col].tolist() if kommo_tag_col in dk.columns else [None] * len(dk)
+    _phone_col = dk[kommo_phone_col].tolist() if kommo_phone_col in dk.columns else [""] * len(dk)
+    _name_col = (dk[kommo_name_col].tolist()
+                 if (kommo_name_col and kommo_name_col in dk.columns) else None)
+    sales_cols = list(df_sales.columns)
+
     result_rows = []
     n_ddd_blocked = 0  # falsos matches evitados (sub8 igual mas DDD diferente)
-    for i, (_, kr) in enumerate(dk.iterrows()):
-        k8_primary = kr.get("Tel_8dig_Kommo", "")
-        tag_raw = "" if pd.isna(kr.get(kommo_tag_col, np.nan)) else str(kr[kommo_tag_col])
+    for i in range(len(dk)):
+        k8_primary = _k8_col[i] or ""
+        tag_raw = "" if pd.isna(_tag_col[i]) else str(_tag_col[i])
+        phone_raw = _phone_col[i]
         is_traffic = _tag_matches(tag_raw, traffic_keyword, traffic_exclude)
 
         # Match por telefone DDD-aware: primeira chave (col principal → alternativas) que casa
@@ -1171,8 +1180,8 @@ def run_procv(
                 match_reason = f"Col. alt. Kommo: {kommo_col} → vendas: {sales_col}"
             break
 
-        if not sales_match and kommo_name_col and name_lookup:
-            kommo_name_raw = str(kr.get(kommo_name_col, ""))
+        if not sales_match and _name_col is not None and name_lookup:
+            kommo_name_raw = str(_name_col[i])
             kommo_norm = _normalize_name(kommo_name_raw)
             if kommo_norm:
                 if kommo_norm in name_lookup:
@@ -1199,14 +1208,18 @@ def run_procv(
 
         row_out = {
             "Tag_Kommo": tag_raw,
-            "Telefone_Kommo": kr.get(kommo_phone_col, ""),
-            "Tel_8dig": _row_ident(matched_ddd, matched_sub8, kr.get(kommo_phone_col, "")),
+            "Telefone_Kommo": phone_raw,
+            "Tel_8dig": _row_ident(matched_ddd, matched_sub8, phone_raw),
             "É_Tráfego": "SIM" if is_traffic else "NÃO",
             "Venda_Confirmada": "SIM" if sales_match else "NÃO",
             "Criterio_Match": match_reason,
         }
-        for col in df_sales.columns:
-            row_out[f"[Venda] {col}"] = sales_match.get(col, "") if sales_match else ""
+        if sales_match:
+            for col in sales_cols:
+                row_out[f"[Venda] {col}"] = sales_match.get(col, "")
+        else:
+            for col in sales_cols:
+                row_out[f"[Venda] {col}"] = ""
 
         result_rows.append(row_out)
 
@@ -1539,9 +1552,18 @@ def run_disparo(
                 if all(key[1] != k[1] for k, _ in disp_row_keys[_i]):
                     disp_row_keys[_i].append((key, _col))
 
+    # Pré-extrai colunas como listas (evita iterrows()) — chave pra escalar no breakdown
+    _d_phone = df_disp_reset[kommo_phone_col].tolist() if kommo_phone_col in df_disp_reset.columns else [""] * len(df_disp_reset)
+    _d_tag = df_disp_reset[kommo_tag_col].tolist() if kommo_tag_col in df_disp_reset.columns else [""] * len(df_disp_reset)
+    _d_date = (df_disp_reset[kommo_date_col].tolist()
+               if (kommo_date_col and kommo_date_col in df_disp_reset.columns) else None)
+    _d_name = (df_disp_reset[kommo_name_col].tolist()
+               if (kommo_name_col and kommo_name_col in df_disp_reset.columns) else None)
+    sales_cols_d = list(df_sales.columns)
+
     result_rows = []
-    for _i, (_, kr) in enumerate(df_disp_reset.iterrows()):
-        tel_raw = kr.get(kommo_phone_col, "")
+    for _i in range(len(df_disp_reset)):
+        tel_raw = _d_phone[_i]
 
         row_keys = disp_row_keys[_i]
         has_phone = bool(row_keys)
@@ -1550,9 +1572,9 @@ def run_disparo(
             continue
 
         # Tenta obter a data do disparo de múltiplas fontes (inteligência)
-        disp_date = parse_date(kr.get(kommo_date_col)) if kommo_date_col else None
+        disp_date = parse_date(_d_date[_i]) if _d_date is not None else None
         if not _is_real_datetime(disp_date):
-            disp_date = parse_date(str(kr.get(kommo_tag_col, "")))
+            disp_date = parse_date(str(_d_tag[_i]))
 
         confirmed_sale = None
         phone_only_sale = None
@@ -1600,7 +1622,7 @@ def run_disparo(
 
         # ── Fallback: match por nome (só quando telefone falhou) ─────────
         if not confirmed_sale and not phone_only_sale and has_name_fallback:
-            kommo_name_raw = str(kr.get(kommo_name_col, ""))
+            kommo_name_raw = str(_d_name[_i]) if _d_name is not None else ""
             kommo_norm = _normalize_name(kommo_name_raw)
             name_candidate = None
             _nr = ""
@@ -1638,7 +1660,7 @@ def run_disparo(
 
         matched_sale = confirmed_sale if confirmed_sale else phone_only_sale
 
-        tag_raw = str(kr.get(kommo_tag_col, ""))
+        tag_raw = str(_d_tag[_i]) if not pd.isna(_d_tag[_i]) else ""
         row_out: dict = {
             "Tag_Kommo": tag_raw,
             "Telefone_Disparo": tel_raw,
@@ -1646,7 +1668,7 @@ def run_disparo(
         }
 
         if kommo_date_col:
-            row_out["Data_Disparo"] = kr.get(kommo_date_col, "")
+            row_out["Data_Disparo"] = _d_date[_i] if _d_date is not None else ""
 
         if matched_sale:
             row_out["Venda_Confirmada"] = "SIM"
@@ -1659,7 +1681,7 @@ def run_disparo(
                         row_out["Dias_Após_Disparo"] = (sale_dt - disp_date).days
                 else:
                     row_out["Data_Venda"] = str(matched_sale.get(sales_date_col, ""))
-            for col in df_sales.columns:
+            for col in sales_cols_d:
                 row_out[f"[Venda] {col}"] = matched_sale.get(col, "")
         else:
             row_out["Venda_Confirmada"] = "NÃO"
@@ -1672,7 +1694,7 @@ def run_disparo(
                 row_out["Data_Venda"] = ""
                 if disp_date:
                     row_out["Dias_Após_Disparo"] = ""
-            for col in df_sales.columns:
+            for col in sales_cols_d:
                 row_out[f"[Venda] {col}"] = ""
 
         result_rows.append(row_out)
@@ -1866,6 +1888,7 @@ def _write_sheet(
     title: str,
     header_hex: str,
     highlight_cols: Optional[List[str]] = None,
+    max_rows: int = 10000,
 ):
     THIN = Border(
         left=Side(style="thin", color="DDDDDD"),
@@ -1874,7 +1897,14 @@ def _write_sheet(
         bottom=Side(style="thin", color="DDDDDD"),
     )
     CENTER = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    LEFT = Alignment(horizontal="left", vertical="center")
+
+    # Limita a LISTAGEM em bases enormes para o Excel não travar. Os totais (Resumo,
+    # Mês a Mês, métricas na tela) são calculados sobre os dados COMPLETOS — só a
+    # listagem detalhada aqui é recortada.
+    n_full = len(df)
+    if max_rows and n_full > max_rows:
+        df = df.head(max_rows)
+        title = f"{title}  —  primeiras {max_rows:,} de {n_full:,} linhas"
 
     # Título
     last_col = get_column_letter(max(len(df.columns), 1))
@@ -1915,8 +1945,11 @@ def _write_sheet(
     # Índice da coluna "Criterio_Match" para detectar match por nome no nível da linha
     _criterio_idx = list(df.columns).index("Criterio_Match") if "Criterio_Match" in df.columns else -1
 
-    # Dados
+    # Dados — só atribui estilo onde há COR de significado (verde/vermelho/zebra…).
+    # Não põe borda/fonte/alinhamento por célula: a cada milhar de linhas isso era
+    # o que travava a geração (eram milhões de objetos de estilo).
     highlight_set = set(highlight_cols or [])
+    cols = list(df.columns)
     for r, row_data in enumerate(df.itertuples(index=False), 3):
         zebra = (r - 3) % 2 == 1
         row_vals = list(row_data)
@@ -1924,11 +1957,8 @@ def _write_sheet(
         is_name_match = criterio_val.startswith("Nome")
 
         for c, value in enumerate(row_vals, 1):
-            col_name = df.columns[c - 1]
+            col_name = cols[c - 1]
             cell = ws.cell(r, c, value if value != "" else None)
-            cell.font = _FONT_DATA
-            cell.alignment = LEFT
-            cell.border = THIN
 
             if col_name == "Venda_Confirmada":
                 if value == "SIM":
@@ -1978,7 +2008,6 @@ def _write_sheet(
                 cell.fill = _FILL_AMBER_ROW_Z if zebra else _FILL_AMBER_ROW
             elif zebra:
                 cell.fill = _FILL_ZEBRA
-        ws.row_dimensions[r].height = 17
 
     # Largura das colunas
     for c, col in enumerate(df.columns, 1):
@@ -2742,22 +2771,26 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                 )
 
             # ── Breakdown mês a mês (quando a planilha de vendas tem várias abas) ──
+            # Em try próprio: se falhar/demais, o relatório principal ainda sai.
             df_breakdown = None
             if "_Planilha" in df_sales_raw.columns:
                 progress.progress(70, text="Cruzando o Kommo com cada aba/mês...")
-                df_breakdown = run_breakdown_by_sheet(
-                    df_sales_raw, sales_phone_col, df_kommo_raw, kommo_phone_col, kommo_tag_col,
-                    traffic_keyword,
-                    sales_date_col=sales_date_col,
-                    disparo_keyword=disparo_keyword if (considerar_disparo and disparo_keyword.strip()) else None,
-                    kommo_date_col=kommo_date_col,
-                    sales_name_col=sales_name_col, kommo_name_col=kommo_name_col,
-                    df_kommo_disp=df_kommo_disparo_raw,
-                    kommo_disp_phone_col=kommo_disp_phone_col,
-                    kommo_disp_tag_col=kommo_disp_tag_col,
-                    traffic_exclude=traffic_exclude,
-                    disparo_exclude=disparo_exclude,
-                )
+                try:
+                    df_breakdown = run_breakdown_by_sheet(
+                        df_sales_raw, sales_phone_col, df_kommo_raw, kommo_phone_col, kommo_tag_col,
+                        traffic_keyword,
+                        sales_date_col=sales_date_col,
+                        disparo_keyword=disparo_keyword if (considerar_disparo and disparo_keyword.strip()) else None,
+                        kommo_date_col=kommo_date_col,
+                        sales_name_col=sales_name_col, kommo_name_col=kommo_name_col,
+                        df_kommo_disp=df_kommo_disparo_raw,
+                        kommo_disp_phone_col=kommo_disp_phone_col,
+                        kommo_disp_tag_col=kommo_disp_tag_col,
+                        traffic_exclude=traffic_exclude,
+                        disparo_exclude=disparo_exclude,
+                    )
+                except Exception:
+                    df_breakdown = None  # não bloqueia o relatório principal
 
             # ── Atribuição: sobreposição tráfego × disparo ────────────────────
             trafego_phones: set = set()
