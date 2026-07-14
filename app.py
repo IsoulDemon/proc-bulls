@@ -2713,7 +2713,15 @@ _CHAT_SYSTEM = (
     "processamento (vendas, kommo, conversões, cruzamento completo) — use-a sempre que a "
     "resposta depender de um dado que não está no contexto: conferir uma venda específica, "
     "um telefone, um lead, quantas linhas têm certa tag. Nunca diga que não tem acesso à "
-    "planilha: consulte. Critérios de match: Telefone; 'Col. alt.' = telefone achado em outra "
+    "planilha: consulte. "
+    "DOUTRINA DO CRUZAMENTO — telefone é a identidade: o PROCV bate telefone com telefone e "
+    "depois olha a tag; TODAS as colunas de telefone dos dois lados são varridas, então um "
+    "cliente com 3 números cadastrados casa por qualquer um deles (e conta UMA vez). Match "
+    "por nome é exceção de último recurso, sempre ⚠️. Ao investigar um cliente, consulte a "
+    "linha dele na tabela 'vendas', anote TODOS os telefones (todas as colunas) e busque "
+    "CADA número no kommo antes de concluir que não casou — nunca pare no primeiro número "
+    "nem se apoie em busca por nome quando houver telefone para conferir. "
+    "Critérios de match: Telefone; 'Col. alt.' = telefone achado em outra "
     "coluna; 'Nome ⚠️' = casou só pelo nome, merece conferência; janela = venda até 30 dias "
     "após a data do disparo; bloqueado por DDD = mesmo final de número em cidades diferentes. "
     "Aja como supervisor: se notar problema de tratamento (coluna errada, telefones inválidos, "
@@ -3188,6 +3196,19 @@ if df_sales_raw is not None and df_kommo_raw is not None:
             key="traffic_exclude",
         )
 
+    # O PROCV é telefone-first: todas as colunas de telefone dos DOIS lados são
+    # varridas (cliente com 3 números casa por qualquer um; dedup por venda).
+    # Nome é último recurso — e aqui o usuário pode desligá-lo de vez.
+    usar_nome_fallback = st.checkbox(
+        "Aceitar match por NOME quando nenhum telefone bater (entra marcado com ⚠️)",
+        value=True,
+        help="O cruzamento bate telefone com telefone: um cliente com 3 números cadastrados "
+             "casa por qualquer um deles, em qualquer coluna. O nome completo (2+ palavras, "
+             "único na planilha) é usado apenas quando NENHUM telefone bateu, sempre marcado "
+             "com ⚠️ para conferência. Desmarque para um resultado 100% por telefone.",
+    )
+    sales_name_col_match: Optional[str] = sales_name_col if usar_nome_fallback else None
+
     # ── 🤖 IA: sugestão de tags (opcional) ────────────────────────────────────
     def _tag_counts_json(df: Optional[pd.DataFrame], col: Optional[str], top: int = 60) -> dict:
         if df is None or not col or col not in df.columns:
@@ -3386,7 +3407,7 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                 df_sales_raw, sales_phone_col,
                 df_kommo_raw, kommo_phone_col, kommo_tag_col,
                 traffic_keyword,
-                sales_name_col=sales_name_col,
+                sales_name_col=sales_name_col_match,
                 kommo_name_col=kommo_name_col,
                 traffic_exclude=traffic_exclude,
             )
@@ -3401,7 +3422,7 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                     df_sales_raw, sales_phone_col, sales_date_col,
                     df_kommo_disp, kommo_disp_phone_col, kommo_disp_tag_col,
                     disparo_keyword, kommo_date_col,
-                    sales_name_col=sales_name_col,
+                    sales_name_col=sales_name_col_match,
                     kommo_name_col=kommo_name_col,
                     disparo_exclude=disparo_exclude,
                 )
@@ -3418,7 +3439,7 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                         sales_date_col=sales_date_col,
                         disparo_keyword=disparo_keyword if (considerar_disparo and disparo_keyword.strip()) else None,
                         kommo_date_col=kommo_date_col,
-                        sales_name_col=sales_name_col, kommo_name_col=kommo_name_col,
+                        sales_name_col=sales_name_col_match, kommo_name_col=kommo_name_col,
                         df_kommo_disp=df_kommo_disparo_raw,
                         kommo_disp_phone_col=kommo_disp_phone_col,
                         kommo_disp_tag_col=kommo_disp_tag_col,
@@ -3516,7 +3537,13 @@ if df_sales_raw is not None and df_kommo_raw is not None:
             st.markdown('<div class="step-wrap"><div class="step-num">📊</div><div class="step-text">Tráfego Pago</div></div>', unsafe_allow_html=True)
             if confirmed > 0:
                 taxa_t = f"{confirmed/total_traffic*100:.1f}%" if total_traffic > 0 else "—"
-                st.success(f"**{confirmed} vendas** encontradas de tráfego pago — {taxa_t} de conversão sobre {total_traffic:,} leads.")
+                _por_nome = int(df_result["Criterio_Match"].astype(str)
+                                .str.contains("Nome", na=False).sum())
+                _por_tel = confirmed - _por_nome
+                _detalhe = (f" · **{_por_tel} por telefone**"
+                            + (f" + **{_por_nome} por nome ⚠️**" if _por_nome else ""))
+                st.success(f"**{confirmed} vendas** encontradas de tráfego pago — {taxa_t} "
+                           f"de conversão sobre {total_traffic:,} leads{_detalhe}.")
                 st.caption("Veja a lista completa na aba **✅ Vendas — Tráfego** do Excel.")
                 with st.expander(f"Prévia — {confirmed} vendas de tráfego"):
                     st.dataframe(df_result, use_container_width=True, height=260)
