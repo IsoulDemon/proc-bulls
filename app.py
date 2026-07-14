@@ -2705,21 +2705,92 @@ def ai_revisar_matches(payload: str):
 
 
 _CHAT_SYSTEM = (
-    "Você é o analista da Proc Aure, conversando DENTRO da ferramenta com o usuário sobre um "
+    "Você é o SUPERVISOR da Proc Aure, conversando DENTRO da ferramenta com o usuário sobre um "
     "processamento que acabou de rodar. O primeiro bloco da conversa traz o contexto em JSON: "
-    "o resumo dos números e as tabelas de conversões de tráfego e de disparo. "
-    "Responda dúvidas sobre ESSE resultado: por que um lead casou ou não, o que significa cada "
-    "critério de match (Telefone; Col. alt. = telefone achado em outra coluna; Nome ⚠️ = casou "
-    "só pelo nome, merece conferência; janela = venda até 30 dias após a data do disparo; "
-    "bloqueado por DDD = mesmo final de número em cidades diferentes, não conta). "
-    "Quando o usuário apontar um ERRO ou der uma informação nova (ex.: 'esses dois são a mesma "
-    "pessoa', 'essa tag não é de tráfego'), aceite a correção, use-a no resto da conversa e "
-    "registre-a numa linha final começando com '📌 Anotado:'. "
-    "Oriente correções práticas: mudar a palavra-chave da tag, escolher outra coluna, excluir "
-    "uma linha no Excel, reprocessar. Se a informação não estiver no contexto, diga isso "
-    "claramente e explique como verificar (ex.: olhar a aba 'Todos os Leads' do Excel). "
-    "Não invente números. Responda em português, direto e sem jargão."
+    "resumo dos números, tratamento aplicado em cada planilha, colunas e mapeamento usado, como "
+    "o cruzamento funciona, conversões e amostras de quem NÃO converteu. "
+    "Além disso você tem a ferramenta consultar_planilha, que acessa as TABELAS REAIS deste "
+    "processamento (vendas, kommo, conversões, cruzamento completo) — use-a sempre que a "
+    "resposta depender de um dado que não está no contexto: conferir uma venda específica, "
+    "um telefone, um lead, quantas linhas têm certa tag. Nunca diga que não tem acesso à "
+    "planilha: consulte. Critérios de match: Telefone; 'Col. alt.' = telefone achado em outra "
+    "coluna; 'Nome ⚠️' = casou só pelo nome, merece conferência; janela = venda até 30 dias "
+    "após a data do disparo; bloqueado por DDD = mesmo final de número em cidades diferentes. "
+    "Aja como supervisor: se notar problema de tratamento (coluna errada, telefones inválidos, "
+    "tag mal escolhida, datas fora do período), aponte e explique como corrigir e reprocessar. "
+    "Quando o usuário corrigir algo (ex.: 'esses dois são a mesma pessoa'), aceite, use no "
+    "resto da conversa e registre numa linha final começando com '📌 Anotado:'. "
+    "Não invente números — confira na tabela antes de afirmar. Responda em português, direto "
+    "e sem jargão."
 )
+
+_CHAT_TOOL = {
+    "name": "consultar_planilha",
+    "description": (
+        "Consulta as tabelas reais DESTE processamento, linha a linha. Tabelas: "
+        "'vendas' (planilha de vendas tratada), 'kommo' (leads do CRM), "
+        "'conversoes_trafego' (vendas atribuídas ao tráfego), "
+        "'todos_os_leads_cruzados' (cada lead do Kommo com É_Tráfego e Venda_Confirmada), "
+        "'disparo' (leads de disparo com Venda_Confirmada). "
+        "Use 'buscar' para filtrar por nome, telefone (qualquer formato) ou tag."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "tabela": {"type": "string",
+                       "enum": ["vendas", "kommo", "conversoes_trafego",
+                                "todos_os_leads_cruzados", "disparo"]},
+            "buscar": {"type": "string",
+                       "description": "Texto ou telefone a procurar em qualquer coluna. "
+                                      "Vazio = primeiras linhas da tabela."},
+            "colunas": {"type": "array", "items": {"type": "string"},
+                        "description": "Colunas a retornar (vazio = principais)."},
+            "max_linhas": {"type": "integer", "description": "Máximo de linhas (até 40)."},
+        },
+        "required": ["tabela"],
+    },
+}
+
+
+def _exec_consulta(inp: dict) -> str:
+    """Executa a consulta do chat nas tabelas guardadas na sessão."""
+    try:
+        dfs = st.session_state.get("_ai_dfs") or {}
+        tab = str(inp.get("tabela", ""))
+        df = dfs.get(tab)
+        if df is None or len(df) == 0:
+            return json.dumps({
+                "erro": f"tabela '{tab}' vazia ou inexistente neste processamento",
+                "tabelas_disponiveis": [k for k, v in dfs.items()
+                                        if v is not None and len(v) > 0],
+            }, ensure_ascii=False)
+        out = df
+        buscar = str(inp.get("buscar") or "").strip()
+        if buscar:
+            digits = re.sub(r"\D", "", buscar)
+            if len(digits) >= 6:
+                sub = digits[-8:]
+                mask = out.apply(lambda r: any(
+                    sub in re.sub(r"\D", "", str(v)) for v in r), axis=1)
+            else:
+                b = _normalize(buscar)
+                mask = out.apply(lambda r: any(
+                    b in _normalize(str(v)) for v in r), axis=1)
+            out = out[mask]
+        cols = [c for c in (inp.get("colunas") or []) if c in out.columns]
+        if not cols:
+            cols = [c for c in out.columns if not str(c).startswith("_")][:14]
+        n = min(int(inp.get("max_linhas") or 20), 40)
+        recs = (out[cols].head(n).astype(str)
+                .apply(lambda s: s.str.slice(0, 80)).to_dict("records"))
+        return json.dumps({
+            "total_de_linhas_encontradas": int(len(out)),
+            "mostrando": len(recs),
+            "colunas_disponiveis": [str(c) for c in df.columns][:60],
+            "linhas": recs,
+        }, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"erro": f"{type(e).__name__}: {e}"}, ensure_ascii=False)
 
 
 def _ai_chat_reply(ctx: str, historico: list) -> tuple:
@@ -2747,16 +2818,31 @@ def _ai_chat_reply(ctx: str, historico: list) -> tuple:
         ]
         for m in historico:
             msgs.append({"role": m["role"], "content": m["content"]})
-        resp = client.messages.create(
-            model=_CLAUDE_MODEL,
-            max_tokens=3000,
-            thinking={"type": "adaptive"},
-            system=_CHAT_SYSTEM,
-            messages=msgs,
-        )
-        if resp.stop_reason == "refusal":
-            return None, "O Claude recusou esta solicitação."
-        return next((b.text for b in resp.content if b.type == "text"), ""), None
+        # Loop agêntico: o Claude consulta as tabelas reais quantas vezes precisar
+        for _ in range(6):
+            resp = client.messages.create(
+                model=_CLAUDE_MODEL,
+                max_tokens=3000,
+                thinking={"type": "adaptive"},
+                system=_CHAT_SYSTEM,
+                tools=[_CHAT_TOOL],
+                messages=msgs,
+            )
+            if resp.stop_reason == "refusal":
+                return None, "O Claude recusou esta solicitação."
+            if resp.stop_reason != "tool_use":
+                return next((b.text for b in resp.content if b.type == "text"), ""), None
+            msgs.append({"role": "assistant", "content": resp.content})
+            results = []
+            for b in resp.content:
+                if b.type == "tool_use":
+                    results.append({
+                        "type": "tool_result",
+                        "tool_use_id": b.id,
+                        "content": _exec_consulta(dict(b.input)),
+                    })
+            msgs.append({"role": "user", "content": results})
+        return None, "A consulta ficou longa demais — tente uma pergunta mais específica."
     except anthropic.AuthenticationError:
         return None, "Chave de API inválida — confira em console.anthropic.com."
     except anthropic.RateLimitError:
@@ -2871,8 +2957,9 @@ with st.sidebar:
              "(centavos por processamento).",
     )
     if _has_ai:
-        st.caption("No passo 2 você verá os botões **🤖 Conferir colunas** e "
-                   "**🤖 Sugerir tags**; a análise do Claude aparece junto com os resultados.")
+        st.caption("O Claude confere as planilhas **automaticamente** ao carregar, "
+                   "sugere as tags no passo 2, analisa o resultado e responde no chat "
+                   "consultando as tabelas reais — como um supervisor do cruzamento.")
 
 # Selo de status da IA — sempre visível na página principal
 if _has_ai:
@@ -2998,19 +3085,22 @@ if df_sales_raw is not None and df_kommo_raw is not None:
     auto_sn = detect_name_col(df_sales_raw)
     auto_kn = detect_name_col(df_kommo_raw)
 
-    # ── 🤖 IA: conferência de colunas (opcional) ──────────────────────────────
-    if st.button(
-        "🤖 Conferir colunas com IA",
-        disabled=not _has_ai,
-        help="O Claude analisa uma amostra das planilhas (telefones mascarados) "
-             "e confere/corrige as colunas detectadas automaticamente."
-             + ("" if _has_ai else " Para ativar, cole sua chave da Anthropic na barra lateral."),
-    ):
-        with st.spinner("🤖 Claude analisando as planilhas..."):
-            st.session_state["_ai_cols_v"] = _ai_safe(
-                ai_mapear_colunas, _ai_payload_planilha(df_sales_raw, "lista de vendas"))
-            st.session_state["_ai_cols_k"] = _ai_safe(
-                ai_mapear_colunas, _ai_payload_planilha(df_kommo_raw, "export do Kommo"))
+    # ── 🤖 IA participa do tratamento: confere as planilhas AUTOMATICAMENTE ──
+    # Roda uma vez por par de arquivos (sucesso fica em cache); erro não gruda
+    # e ganha botão de repetir.
+    if _has_ai:
+        _pv = _ai_payload_planilha(df_sales_raw, "lista de vendas")
+        _pk = _ai_payload_planilha(df_kommo_raw, "export do Kommo")
+        if st.session_state.get("_ai_cols_payloads") != (_pv, _pk):
+            with st.spinner("🤖 Claude conferindo as planilhas..."):
+                st.session_state["_ai_cols_v"] = _ai_safe(ai_mapear_colunas, _pv)
+                st.session_state["_ai_cols_k"] = _ai_safe(ai_mapear_colunas, _pk)
+            st.session_state["_ai_cols_payloads"] = (_pv, _pk)
+        if (st.session_state.get("_ai_cols_v", (None, None))[1]
+                or st.session_state.get("_ai_cols_k", (None, None))[1]):
+            if st.button("🔁 Tentar a conferência das planilhas de novo"):
+                st.session_state.pop("_ai_cols_payloads", None)
+                st.rerun()
     _ai_v_res, _ai_v_err = st.session_state.get("_ai_cols_v", (None, None))
     _ai_k_res, _ai_k_err = st.session_state.get("_ai_cols_k", (None, None))
     for _ai_e in (_ai_v_err, _ai_k_err):
@@ -3573,11 +3663,72 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                         cols.append(f"[Venda] {_c}")
                 return df[cols].head(n).astype(str).to_dict("records")
 
+            # Colunas de telefone das vendas: preenchimento e validade de cada uma
+            _tel_cols_stats = {}
+            for _c in df_sales_raw.columns:
+                if str(_c).startswith("_"):
+                    continue
+                _cd = df_sales_raw[_c].dropna()
+                if len(_cd) > 0 and _is_phone_col(_cd):
+                    _tel_cols_stats[str(_c)] = {
+                        "preenchidos": int(len(_cd)),
+                        "telefones_validos": int(_cd.apply(
+                            lambda v: phone_key(v)[1] != "").sum()),
+                    }
+
+            _nao_conv = df_full[(df_full["É_Tráfego"] == "SIM")
+                                & (df_full["Venda_Confirmada"] == "NÃO")]
+            _nao_conv_amostra = [
+                {"nome": str(_r.get("Nome_Kommo", "")),
+                 "telefone": _mask_pii(str(_r.get("Telefone_Kommo", ""))),
+                 "tags": str(_r.get("Tag_Kommo", ""))[:60]}
+                for _, _r in _nao_conv.head(20).iterrows()
+            ]
+            _sem_tel_amostra = []
+            if sales_name_col:
+                _sem_tel_amostra = (df_sales_raw.loc[phones_series == "", sales_name_col]
+                                    .dropna().astype(str).head(10).tolist())
+
             st.session_state["_ai_ctx"] = json.dumps({
                 "resumo": _resumo_dict,
+                "tratamento_aplicado_nas_planilhas": {
+                    "vendas": list(df_sales_raw.attrs.get("treatment_notes", [])),
+                    "kommo": list(df_kommo_raw.attrs.get("treatment_notes", [])),
+                },
+                "colunas": {
+                    "todas_da_planilha_de_vendas": [str(c) for c in df_sales_raw.columns][:80],
+                    "colunas_de_telefone_das_vendas": _tel_cols_stats,
+                    "mapeamento_usado": {
+                        "telefone_vendas": sales_phone_col, "nome_vendas": sales_name_col,
+                        "valor_venda": sales_value_col, "data_venda": sales_date_col,
+                        "telefone_kommo": kommo_phone_col, "tags_kommo": kommo_tag_col,
+                        "nome_kommo": kommo_name_col, "data_disparo_kommo": kommo_date_col,
+                    },
+                    "observacoes_da_ia_sobre_as_planilhas": {
+                        "vendas": (_ai_v_res or {}).get("observacao"),
+                        "kommo": (_ai_k_res or {}).get("observacao"),
+                    },
+                },
+                "como_a_ferramenta_cruza": (
+                    "Varre TODAS as colunas com cara de telefone dos dois lados (não só a "
+                    "principal) e também números soltos fora delas; normaliza com/sem DDD, "
+                    "com/sem o 9, DDI 55, pontos/traços; o match exige DDD igual quando os "
+                    "dois lados têm DDD; fallback por nome (2+ palavras) marcado com ⚠️; "
+                    "deduplica por comprador (telefone) e por venda; disparo: vale a venda "
+                    "de 0 a 30 dias após a data do disparo (extraída da tag ou da coluna)."),
                 "conversoes_de_trafego": _tbl_chat(df_result),
                 "conversoes_de_disparo": _tbl_chat(disp_sim_df),
+                "leads_de_trafego_que_NAO_converteram_amostra": _nao_conv_amostra,
+                "vendas_sem_telefone_amostra": _sem_tel_amostra,
             }, ensure_ascii=False, default=str)
+            # Tabelas REAIS ficam na sessão — o chat consulta linha a linha via tool
+            st.session_state["_ai_dfs"] = {
+                "vendas": df_sales_raw,
+                "kommo": df_kommo_raw,
+                "conversoes_trafego": df_result,
+                "todos_os_leads_cruzados": df_full,
+                "disparo": df_disparo_result,
+            }
             st.session_state.pop("_ai_chat", None)  # novo processamento → conversa nova
 
             # ── 🤖 Análise do Claude ────────────────────────────────────────────
@@ -3746,7 +3897,8 @@ if st.session_state.get("_ai_ctx"):
             f"Contexto carregado: **{_ctx_resumo.get('vendas', {}).get('total', '?')} vendas** · "
             f"**{_ctx_resumo.get('trafego', {}).get('conversoes', '?')} conversões de tráfego** · "
             f"**{_ctx_resumo.get('disparo', {}).get('conversoes_na_janela_30d', '?')} de disparo**. "
-            "O Claude responde sobre ESTE processamento — pergunte, questione, corrija."
+            "O Claude supervisiona ESTE processamento com acesso às tabelas reais — "
+            "ele consulta as planilhas linha a linha para responder. Pergunte, questione, corrija."
         )
     except Exception:
         pass
