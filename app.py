@@ -362,9 +362,11 @@ def detect_phone_col(df: pd.DataFrame) -> Optional[str]:
         "mobile", "cel", "numero", "número", "tel", "contato",
         "phone_number", "nr_tel", "nro", "n_tel",
     ]
+    # "id" com fronteira de palavra — substring pegaria "Telefone resIDencial"
     skip_kws = ["data", "date", "valor", "preco", "preço", "total",
-                "cpf", "cnpj", "cep", "id", "código", "codigo",
+                "cpf", "cnpj", "cep", "código", "codigo",
                 "documento", "doc", "inscricao", "inscrição"]
+    _id_re = re.compile(r"(?:^|[^a-zà-ÿ])id(?:[^a-zà-ÿ]|$)")
 
     def _phone_hits(col: str) -> int:
         sample = df[col].dropna().astype(str).head(30)
@@ -374,7 +376,7 @@ def detect_phone_col(df: pd.DataFrame) -> Optional[str]:
 
     candidates = []
     for col in df.columns:
-        if _match_keywords(col, skip_kws):
+        if _match_keywords(col, skip_kws) or _id_re.search(str(col).lower()):
             continue
         hits = _phone_hits(col)
         if hits < 2:
@@ -382,7 +384,10 @@ def detect_phone_col(df: pd.DataFrame) -> Optional[str]:
         sample_size = max(1, len(df[col].dropna().head(30)))
         content_score = int((hits / sample_size) * 60)
         name_bonus = 40 if _match_keywords(col, kws) else 0
-        candidates.append((col, content_score + name_bonus))
+        # Cobertura desempata: 'Telefone comercial' com 700 números preenchidos
+        # vence 'Celular' com 240 — mais telefones = melhor coluna principal.
+        coverage_bonus = int(len(df[col].dropna()) / max(1, len(df)) * 15)
+        candidates.append((col, content_score + name_bonus + coverage_bonus))
 
     if not candidates:
         return None
@@ -400,14 +405,25 @@ def detect_tag_col(df: pd.DataFrame) -> Optional[str]:
 
 @st.cache_data(show_spinner=False)
 def detect_name_col(df: pd.DataFrame) -> Optional[str]:
+    """Ordem dos kws = prioridade ('Nome do contato' vence 'ID contato').
+    Valida o conteúdo: coluna de nome precisa ter texto, não números/IDs."""
     kws = ["nome", "name", "cliente", "comprador", "titular", "razao", "razão", "social", "contato"]
     skip_kws = ["telefone", "cel", "phone", "whatsapp", "wpp", "email",
                 "cidade", "estado", "produto", "tag", "etiqueta"]
-    for col in df.columns:
-        if _match_keywords(col, skip_kws):
-            continue
-        if _match_keywords(col, kws):
-            return col
+
+    def _has_text_content(col: str) -> bool:
+        sample = df[col].dropna().astype(str).head(20)
+        if len(sample) == 0:
+            return False
+        with_letters = sum(1 for v in sample if len(re.findall(r"[^\W\d_]", v)) >= 2)
+        return with_letters / len(sample) >= 0.6
+
+    for kw in kws:
+        for col in df.columns:
+            if _match_keywords(col, skip_kws):
+                continue
+            if kw in str(col).lower() and _has_text_content(col):
+                return col
     return None
 
 
@@ -433,9 +449,20 @@ def detect_value_col(df: pd.DataFrame) -> Optional[str]:
         s = re.sub(r"[R$\s]", "", str(v).strip())
         if not s or not re.search(r"\d", s):
             return None
+        if re.search(r"[A-Za-z]", s):
+            return None  # "30-Jun-26", códigos etc. — não é preço
         if "," in s:
             try:
                 val = float(s.replace(".", "").replace(",", "."))
+                return val if val < 10_000_000 else None
+            except ValueError:
+                return None
+        # Decimal americano ("8386.5", "3669.68000000000") — exatamente 3 casas
+        # é milhar BR ("1.234"), que cai no caminho de dígitos puros abaixo.
+        m_us = re.fullmatch(r"(\d+)\.(\d+)", s)
+        if m_us and len(m_us.group(2)) != 3:
+            try:
+                val = float(s)
                 return val if val < 10_000_000 else None
             except ValueError:
                 return None
@@ -464,7 +491,10 @@ def detect_value_col(df: pd.DataFrame) -> Optional[str]:
             continue
 
         n_nonzero = sum(1 for v in vals if v > 0)
-        n_decimal = sum(1 for v in sample if "," in str(v))
+        n_decimal = sum(
+            1 for v, p in zip(sample, parsed)
+            if "," in str(v) or (p is not None and p != int(p))
+        )
         mean_val = sum(vals) / len(vals)
 
         # Coeficiente de variação: preços reais têm variância razoável
@@ -587,13 +617,22 @@ def detect_header_row(df_raw: pd.DataFrame) -> int:
     Retorna -1 quando a planilha NÃO tem cabeçalho (dados já na 1ª linha preenchida).
     """
     n_cols = len(df_raw.columns)
-    min_filled = max(2, int(n_cols * 0.3))
+    scan = min(30, len(df_raw))
 
-    for i in range(min(10, len(df_raw))):
+    # Preenchimento por linha. Relatórios de ERP têm MUITAS colunas vazias e o
+    # cabeçalho usa poucas células — o piso é adaptativo à linha mais densa.
+    fills = []
+    for i in range(scan):
+        row = df_raw.iloc[i]
+        fills.append(sum(1 for v in row if pd.notna(v) and str(v).strip() not in ("", "nan")))
+    densest = max(fills, default=0)
+    min_filled = max(2, min(int(n_cols * 0.3), max(2, int(densest * 0.5))))
+
+    for i in range(scan):
+        if fills[i] < min_filled:
+            continue
         row = df_raw.iloc[i]
         non_null = [v for v in row if pd.notna(v) and str(v).strip() not in ("", "nan")]
-        if len(non_null) < min_filled:
-            continue
         label_count = sum(
             1 for v in non_null
             if isinstance(v, str)
@@ -604,11 +643,9 @@ def detect_header_row(df_raw: pd.DataFrame) -> int:
             return i
 
     # Nenhum cabeçalho claro: se a 1ª linha preenchida já é dado, é planilha SEM cabeçalho
-    for i in range(min(10, len(df_raw))):
-        row = df_raw.iloc[i]
-        non_null = [v for v in row if pd.notna(v) and str(v).strip() not in ("", "nan")]
-        if len(non_null) >= min_filled:
-            return -1 if _looks_like_data_row(row) else 0
+    for i in range(scan):
+        if fills[i] >= min_filled:
+            return -1 if _looks_like_data_row(df_raw.iloc[i]) else 0
     return 0
 
 
@@ -704,6 +741,8 @@ def _frame_from_raw(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, int, list]:
     Trata: blocos lado a lado, detecção de cabeçalho, planilha sem cabeçalho e linhas de soma.
     """
     notes: list = []
+    if len(df_raw) == 0 or len(df_raw.columns) == 0:
+        return pd.DataFrame(), 0, []
     df_raw = _split_side_by_side_blocks(df_raw)
     blocks_merged = df_raw.attrs.get("blocks_merged", 0)
     if blocks_merged:
@@ -865,7 +904,13 @@ def load_file_multisheet(
         elif name.endswith((".xlsx", ".xls", ".xlsm")):
             xls = _open_excel_file(uploaded)
             for sheet in selected_sheets:
-                df, hrow, notes = _load_single_sheet(xls, sheet)
+                try:
+                    df, hrow, notes = _load_single_sheet(xls, sheet)
+                except Exception as e:
+                    treatment_notes.append(
+                        f"Aba '{sheet}' ignorada — erro ao ler ({type(e).__name__}): {e}"
+                    )
+                    continue
                 if len(df) > 0:
                     df = _normalize_cols(df)
                     score = _score_sheet(df)
@@ -1113,7 +1158,9 @@ def run_procv(
             if pd.isna(raw):
                 continue
             norm = _normalize_name(str(raw))
-            if norm:
+            # Nome de 1 palavra ("MARCIA") é ambíguo demais — casaria com
+            # qualquer homônimo entre milhares de leads. Precisão > recall.
+            if norm and len(norm.split()) >= 2:
                 _name_count[norm] = _name_count.get(norm, 0) + 1
                 if _name_count[norm] == 1:
                     name_lookup[norm] = _rows_dict[idx]
@@ -1432,19 +1479,33 @@ def detect_date_col(df: pd.DataFrame) -> Optional[str]:
     skip_kws = ["telefone", "celular", "phone", "tel", "whatsapp", "wpp",
                 "valor", "preco", "preço", "total", "cpf", "cnpj", "cep"]
 
+    # Valor monetário ("76915.55", "1.234,56") não é data — o parser de serial
+    # Excel transformaria dinheiro na faixa 35000-60000 em datas fantasma.
+    _money_re = re.compile(r"R?\$?\s*-?(?:\d{1,3}(?:\.\d{3})*,\d{1,2}|\d+\.\d+)")
+
     candidates: list = []
     for col in df.columns:
         if _match_keywords(col, skip_kws):
             continue
-        sample = df[col].dropna().head(25)
+        col_nonnull = df[col].dropna()
+        # Meia dúzia de células soltas (data de emissão no rodapé do relatório)
+        # não é a coluna de data das vendas.
+        if len(df) > 30 and len(col_nonnull) < 3:
+            continue
+        sample = col_nonnull.head(25)
         if len(sample) == 0:
+            continue
+        money_like = sum(1 for v in sample if _money_re.fullmatch(str(v).strip()))
+        if money_like / len(sample) >= 0.4:
             continue
         hits = sum(1 for v in sample if parse_date(v) is not None)
         if hits < 2:
             continue
         content_score = int((hits / len(sample)) * 60)  # 0-60
         name_bonus = 40 if _match_keywords(col, kws) else 0
-        candidates.append((col, content_score + name_bonus))
+        # Coluna constante (ex.: "período: 01/06") não é a data da venda
+        variance_penalty = 30 if (len(sample) >= 5 and sample.astype(str).nunique() == 1) else 0
+        candidates.append((col, content_score + name_bonus - variance_penalty))
 
     if not candidates:
         return None
@@ -1526,7 +1587,8 @@ def run_disparo(
             if pd.isna(_raw):
                 continue
             _norm = _normalize_name(str(_raw))
-            if _norm:
+            # 1 palavra é ambíguo demais (ver run_procv) — precisão > recall
+            if _norm and len(_norm.split()) >= 2:
                 _nc[_norm] = _nc.get(_norm, 0) + 1
                 if _nc[_norm] == 1:
                     disp_name_lookup[_norm] = _ds_rows[_idx]
@@ -1571,10 +1633,22 @@ def run_disparo(
         if not has_phone and not has_name_fallback:
             continue
 
-        # Tenta obter a data do disparo de múltiplas fontes (inteligência)
-        disp_date = parse_date(_d_date[_i]) if _d_date is not None else None
+        # Data do disparo: 1) data no texto da PRÓPRIA tag de disparo (ex.:
+        # "DISPARO NAMORADOS 09/06/26" — sinal direto da campanha), 2) coluna de
+        # data do Kommo (geralmente "Criado em", que pode ser bem anterior ao
+        # disparo em leads importados), 3) qualquer data no texto das tags.
+        _tag_txt = "" if pd.isna(_d_tag[_i]) else str(_d_tag[_i])
+        disp_date = None
+        for _seg in _tag_txt.split(","):
+            if _tag_matches(_seg, disparo_keyword, disparo_exclude):
+                _sd = parse_date(_seg)
+                if _is_real_datetime(_sd):
+                    disp_date = _sd
+                    break
+        if not _is_real_datetime(disp_date) and _d_date is not None:
+            disp_date = parse_date(_d_date[_i])
         if not _is_real_datetime(disp_date):
-            disp_date = parse_date(str(_d_tag[_i]))
+            disp_date = parse_date(_tag_txt)
 
         confirmed_sale = None
         phone_only_sale = None
@@ -1707,7 +1781,7 @@ def run_disparo(
     if "Tel_8dig" in df_res.columns:
         mask_tel = df_res["Tel_8dig"].str.len() > 0
         df_com_tel = (df_res[mask_tel]
-                      .sort_values("Venda_Confirmada", ascending=True)  # NÃO < SIM
+                      .sort_values("Venda_Confirmada", ascending=False)  # SIM primeiro
                       .drop_duplicates(subset=["Tel_8dig"]))
         df_sem_tel = df_res[~mask_tel]
         df_res = pd.concat([df_com_tel, df_sem_tel], ignore_index=True)

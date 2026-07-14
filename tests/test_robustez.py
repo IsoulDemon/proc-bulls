@@ -352,11 +352,134 @@ def test_planilha_do_inferno():
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# R13. Regressões de bugs achados com planilhas REAIS (julho/2026)
+# ════════════════════════════════════════════════════════════════════════════
+def test_regressoes_dados_reais():
+    cat("R13. Regressões — bugs de dados reais")
+
+    # 1) Dedup do disparo: mesmo comprador em 2 leads (um converte, outro não)
+    #    → o SIM tem que sobreviver ao dedup (bug: mantinha o NÃO).
+    sales = pd.DataFrame({
+        "Cliente": ["Ana Lima"], "Telefone": ["11988887777"], "Data": ["15/06/2026"],
+    })
+    kommo = pd.DataFrame({
+        "Celular": ["11988887777", "11988887777"],
+        "Tags": ["DISPARO ANTIGO 01/01/26", "DISPARO PROMO 10/06/26"],
+    })
+    disp = app.run_disparo(sales, "Telefone", "Data", kommo, "Celular", "Tags",
+                           "disparo", None, 30)
+    ck("dedup disparo mantém o SIM", len(disp) == 1 and disp.iloc[0]["Venda_Confirmada"] == "SIM",
+       f"{disp[['Venda_Confirmada']].to_dict('records') if len(disp) else 'vazio'}")
+
+    # 2) Data do disparo vem da TAG mesmo quando a coluna de data do Kommo
+    #    (Criado em) é muito anterior (lead importado meses antes do disparo).
+    kommo2 = pd.DataFrame({
+        "Celular": ["11988887777"],
+        "Tags": ["DISPARO PROMO 10/06/26"],
+        "Criado em": ["10.01.2026 08:00:00"],
+    })
+    disp2 = app.run_disparo(sales, "Telefone", "Data", kommo2, "Celular", "Tags",
+                            "disparo", "Criado em", 30)
+    ck("data do disparo prioriza a tag sobre 'Criado em'",
+       len(disp2) == 1 and disp2.iloc[0]["Venda_Confirmada"] == "SIM",
+       f"{disp2[['Venda_Confirmada']].to_dict('records') if len(disp2) else 'vazio'}")
+
+    # 3) Aba vazia no arquivo não pode derrubar as abas boas (caso PROCV AUTORE)
+    df3 = load_xlsx({
+        "Página1": [],
+        "Dados": [["Nome", "Telefone"], ["Ana Lima", "11988887777"]],
+    })
+    ck("aba vazia não mata o arquivo", df3 is not None and len(df3) == 1,
+       f"shape={df3.shape if df3 is not None else None}")
+
+    # 4) Cabeçalho esparso além da linha 10 (relatório de ERP, caso Carmen Steffens)
+    W = 20
+    def _row(cells: dict):
+        r = [None] * W
+        for i, v in cells.items():
+            r[i] = v
+        return r
+    rows = [
+        _row({8: "R_LOJA X"}), _row({}), _row({}), _row({}),
+        _row({0: "RELATÓRIO DE VENDAS"}), _row({0: "Período: 01/06 a 30/06"}),
+        _row({}), _row({}), _row({0: "Loja.: V792"}), _row({}),
+        _row({0: "Nome do Cliente", 4: "CPF", 8: "Celular", 14: "Qtd", 19: "Val.Comprado"}),
+        _row({0: "Talita Silva", 4: "28102208830", 8: "(16) 997121378", 14: "6", 19: "3669.68"}),
+        _row({0: "Flavia Duarte", 4: "05202696671", 8: "(34) 999681010", 14: "6", 19: "3659.47"}),
+        _row({0: "Alexandra Souza", 4: "03769132157", 8: "(64) 996419007", 14: "6", 19: "3294.59"}),
+    ]
+    df4 = load_xlsx({"Sheet1": rows})
+    ck("cabeçalho esparso na linha 10 detectado",
+       df4 is not None and "Nome do Cliente" in df4.columns and len(df4) == 3,
+       f"cols={list(df4.columns)[:6] if df4 is not None else None}")
+    if df4 is not None and "Celular" in df4.columns:
+        ck("telefone detectado no relatório ERP", app.detect_phone_col(df4) == "Celular",
+           str(app.detect_phone_col(df4)))
+        ck("valor US ('3669.68') detectado", app.detect_value_col(df4) == "Val.Comprado",
+           str(app.detect_value_col(df4)))
+
+    # 5) Valor com decimal americano vence contagem de itens; data com letras não é preço
+    df5 = pd.DataFrame({
+        "Qtd.Comprada": ["6", "4", "5", "2", "7"],
+        "Val.Comprado": ["3669.68", "3659.47", "3294.59", "2715.81", "1639.38"],
+        "ultimacompra": ["30-Jun-26", "19-Jun-26", "22-Jun-26", "26-Jun-26", "11-Jun-26"],
+    })
+    ck("valor: decimal US vence qtd", app.detect_value_col(df5) == "Val.Comprado",
+       str(app.detect_value_col(df5)))
+
+    # 6) Coluna de data: dinheiro (faixa de serial Excel!) e coluna constante perdem
+    df6 = pd.DataFrame({
+        "periodo_ini": ["01-Jun-26"] * 5,
+        "ultimacompra": ["30-Jun-26", "19-Jun-26", "22-Jun-26", "26-Jun-26", "11-Jun-26"],
+        "Val.Comprado": ["39990.00", "45678.55", "51234.10", "38000.99", "42111.30"],
+    })
+    ck("data: coluna variada vence a constante e o dinheiro",
+       app.detect_date_col(df6) == "ultimacompra", str(app.detect_date_col(df6)))
+
+    # 7) Coluna de nome: 'ID contato' (números) perde para 'Nome do contato'
+    df7 = pd.DataFrame({
+        "ID contato": ["703524540", "703219807", "703219807"],
+        "Nome do contato": ["Silvio Moreira", "Pedro Miguel", "Pedro Miguel"],
+    })
+    ck("nome: pula coluna de ID", app.detect_name_col(df7) == "Nome do contato",
+       str(app.detect_name_col(df7)))
+
+    # 8) Coluna de telefone: cobertura desempata; 'resIDencial' não é 'id'
+    n = 20
+    df8 = pd.DataFrame({
+        "Celular": ["11988887777", "21999990000", "31988881111", "41977772222", "51966663333"] + [None] * (n - 5),
+        "Telefone comercial": [f"119{k:08d}" for k in range(12345678, 12345678 + n)],
+    })
+    ck("telefone: coluna mais preenchida vence",
+       app.detect_phone_col(df8) == "Telefone comercial", str(app.detect_phone_col(df8)))
+    df8b = pd.DataFrame({"Telefone residencial": ["1133334444", "2133335555", "3133336666"]})
+    ck("'Telefone residencial' não é bloqueado pelo skip de 'id'",
+       app.detect_phone_col(df8b) == "Telefone residencial", str(app.detect_phone_col(df8b)))
+
+    # 9) Nome de 1 palavra não casa (homônimos aos milhares); 2 palavras casa
+    sales9 = pd.DataFrame({
+        "Cliente": ["MARCIA", "Maria Silva"],
+        "Telefone": ["1133334444", "1133335555"],
+    })
+    kommo9 = pd.DataFrame({
+        "Celular": ["66999871234", "66999875678"],
+        "Tags": ["TRAFEGO", "TRAFEGO"],
+        "Nome completo": ["Marcia", "Maria Silva"],
+    })
+    _, _, traf9, full9 = app.run_procv(sales9, "Telefone", kommo9, "Celular", "Tags",
+                                       "trafego", sales_name_col="Cliente",
+                                       kommo_name_col="Nome completo")
+    crits = list(full9[full9["Venda_Confirmada"] == "SIM"]["Criterio_Match"])
+    ck("nome 1 palavra não casa; 2 palavras casa", len(traf9) == 1 and "Nome" in (crits[0] if crits else ""),
+       f"traf={len(traf9)} crits={crits}")
+
+
+# ════════════════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
     for fn in (test_telefone_sujo, test_nao_telefone, test_valores, test_datas,
                test_percepcao, test_tipos_nativos, test_encodings_csv, test_linhas_lixo,
                test_header_dificil, test_procv_confuso, test_disparo_confuso,
-               test_planilha_do_inferno):
+               test_planilha_do_inferno, test_regressoes_dados_reais):
         try:
             fn()
         except Exception as e:
