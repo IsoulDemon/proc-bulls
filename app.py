@@ -4,6 +4,8 @@ Desenvolvido por João · Aure Digital
 """
 
 import io
+import json
+import os
 import re
 import traceback
 from datetime import datetime, timedelta
@@ -1260,6 +1262,8 @@ def run_procv(
         row_out = {
             "Tag_Kommo": tag_raw,
             "Telefone_Kommo": phone_raw,
+            "Nome_Kommo": ("" if (_name_col is None or pd.isna(_name_col[i]))
+                           else str(_name_col[i])),
             "Tel_8dig": _row_ident(matched_ddd, matched_sub8, phone_raw),
             "É_Tráfego": "SIM" if is_traffic else "NÃO",
             "Venda_Confirmada": "SIM" if sales_match else "NÃO",
@@ -1763,6 +1767,8 @@ def run_disparo(
         row_out: dict = {
             "Tag_Kommo": tag_raw,
             "Telefone_Disparo": tel_raw,
+            "Nome_Kommo": ("" if (_d_name is None or pd.isna(_d_name[_i]))
+                           else str(_d_name[_i])),
             "Tel_8dig": _row_ident(matched_ddd, matched_sub8, tel_raw),
             "_Venda_Idx": str(matched_sale.get("_venda_idx", "")) if matched_sale else "",
         }
@@ -2488,6 +2494,227 @@ def build_excel(
     return buf.getvalue()
 
 
+# ── Inteligência Claude (opcional) ─────────────────────────────────────────────
+# A ferramenta funciona 100% sem chave de API — a IA é uma camada extra que
+# confere colunas, classifica tags, revisa matches duvidosos e explica resultados.
+
+_CLAUDE_MODEL = "claude-opus-4-8"
+
+
+def _get_api_key() -> Optional[str]:
+    """Chave da API da Anthropic: st.secrets → variável de ambiente → sidebar."""
+    key = None
+    try:
+        key = st.secrets.get("ANTHROPIC_API_KEY")
+    except Exception:
+        pass
+    return key or os.environ.get("ANTHROPIC_API_KEY") or st.session_state.get("_ai_key_input")
+
+
+def _mask_pii(v) -> str:
+    """Mascara o miolo de sequências com 6+ dígitos (telefone/CPF) antes de
+    enviar amostras para a API — o suficiente para reconhecer o TIPO da coluna."""
+    s = str(v)
+    out, runs = list(s), []
+    start = None
+    for i, ch in enumerate(s + " "):
+        if ch.isdigit():
+            if start is None:
+                start = i
+        elif start is not None:
+            runs.append((start, i))
+            start = None
+    for a, b in runs:
+        if b - a >= 6:
+            for i in range(a + 2, b - 2):
+                out[i] = "•"
+    return "".join(out)
+
+
+class _AIError(Exception):
+    """Erro amigável de IA. Levantado dentro das funções cacheadas para que o
+    st.cache_data NÃO guarde falhas (ex.: chave inválida corrigida depois)."""
+
+
+def _ai_safe(fn, *args) -> tuple:
+    """Chama uma função de IA cacheada devolvendo (resultado, erro_amigável)."""
+    try:
+        return fn(*args), None
+    except _AIError as e:
+        return None, str(e)
+
+
+def _ai_call(system: str, user_text: str, schema: Optional[dict] = None,
+             max_tokens: int = 4000, api_key: Optional[str] = None):
+    """Uma chamada ao Claude. Retorna o resultado ou levanta _AIError.
+    Com schema → dict validado; sem schema → texto."""
+    key = api_key or _get_api_key()
+    if not key:
+        raise _AIError("Sem chave de API configurada.")
+    import anthropic
+    try:
+        client = anthropic.Anthropic(api_key=key)
+        kwargs: dict = {}
+        if schema is not None:
+            kwargs["output_config"] = {"format": {"type": "json_schema", "schema": schema}}
+        resp = client.messages.create(
+            model=_CLAUDE_MODEL,
+            max_tokens=max_tokens,
+            thinking={"type": "adaptive"},
+            system=system,
+            messages=[{"role": "user", "content": user_text}],
+            **kwargs,
+        )
+        if resp.stop_reason == "refusal":
+            raise _AIError("O Claude recusou esta solicitação.")
+        text = next((b.text for b in resp.content if b.type == "text"), "")
+        if schema is not None:
+            return json.loads(text)
+        return text
+    except _AIError:
+        raise
+    except anthropic.AuthenticationError:
+        raise _AIError("Chave de API inválida — confira em console.anthropic.com.")
+    except anthropic.RateLimitError:
+        raise _AIError("Limite de requisições atingido — aguarde um minuto e tente de novo.")
+    except anthropic.APIConnectionError:
+        raise _AIError("Sem conexão com a API da Anthropic — verifique a internet.")
+    except anthropic.APIStatusError as e:
+        raise _AIError(f"Erro da API ({e.status_code}) — tente novamente.")
+    except Exception as e:
+        raise _AIError(f"Erro inesperado na IA: {type(e).__name__}.")
+
+
+def _ai_payload_planilha(df: pd.DataFrame, rotulo: str, n_amostras: int = 5) -> str:
+    """Nome das colunas + amostras mascaradas — o que o Claude precisa para mapear."""
+    amostras = {}
+    for c in list(df.columns)[:80]:
+        vals = df[c].dropna().astype(str).head(n_amostras).tolist()
+        amostras[str(c)] = [_mask_pii(v)[:40] for v in vals]
+    return json.dumps(
+        {"planilha": rotulo, "total_linhas": len(df), "colunas_e_amostras": amostras},
+        ensure_ascii=False,
+    )
+
+
+_SCHEMA_COLUNAS = {
+    "type": "object",
+    "properties": {
+        "telefone": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "nome": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "valor": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "data": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "tags": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "observacao": {"type": "string"},
+    },
+    "required": ["telefone", "nome", "valor", "data", "tags", "observacao"],
+    "additionalProperties": False,
+}
+
+
+@st.cache_data(show_spinner=False)
+def ai_mapear_colunas(payload: str):
+    """Claude aponta qual coluna é telefone/nome/valor/data/tags."""
+    system = (
+        "Você analisa planilhas brasileiras de vendas e exports do CRM Kommo. "
+        "Dado o nome das colunas e amostras (telefones mascarados com •), identifique a MELHOR coluna para cada papel: "
+        "telefone do cliente (a mais preenchida com números de telefone), nome do cliente, "
+        "valor da venda em R$ (não quantidade, não código), data da venda (a que varia por linha; "
+        "ignore datas de período do relatório, que são constantes) e tags/etiquetas. "
+        "Use null quando não existir coluna para o papel. Responda com o nome EXATO da coluna. "
+        "Em 'observacao', avise em 1-2 frases sobre problemas que notou (ex.: telefones sem DDD, "
+        "coluna de valor em formato americano, datas constantes)."
+    )
+    return _ai_call(system, payload, _SCHEMA_COLUNAS)
+
+
+_SCHEMA_TAGS = {
+    "type": "object",
+    "properties": {
+        "trafego_incluir": {"type": "string"},
+        "trafego_excluir": {"type": "string"},
+        "disparo_incluir": {"type": "string"},
+        "disparo_excluir": {"type": "string"},
+        "explicacao": {"type": "string"},
+    },
+    "required": ["trafego_incluir", "trafego_excluir", "disparo_incluir",
+                 "disparo_excluir", "explicacao"],
+    "additionalProperties": False,
+}
+
+
+@st.cache_data(show_spinner=False)
+def ai_sugerir_tags(payload: str):
+    """Claude classifica as tags do Kommo em tráfego pago × disparo × outras."""
+    system = (
+        "Você conhece o CRM Kommo usado por agências de tráfego pago no Brasil. "
+        "Receberá a lista de tags de leads com a contagem de cada uma. Classifique: "
+        "quais identificam leads de TRÁFEGO PAGO (ex.: TRAFEGO, Tráfego, ads) e quais identificam "
+        "DISPAROS de WhatsApp (ex.: 'DISPARO NAMORADOS 09/06/26', 'DISPARO LIVE'). "
+        "Tags de origem orgânica (INSTAGRAM, indicação), de vendedoras (nomes próprios), de importação "
+        "(IMPORT LEADS) e de teste NÃO são tráfego nem disparo. "
+        "Responda com palavras-chave em minúsculas, separadas por vírgula, prontas para busca por "
+        "substring sem acento (ex.: 'trafego' casa 'TRÁFEGO' e 'Tráfego'). Prefira UMA palavra-chave "
+        "curta que cubra o grupo todo; use o campo excluir para separar falsos positivos "
+        "(ex.: excluir 'organico' quando existir 'Tráfego Orgânico'). Deixe campos vazios se não houver. "
+        "Em 'explicacao', 1-3 frases sobre o que você encontrou."
+    )
+    return _ai_call(system, payload, _SCHEMA_TAGS)
+
+
+_SCHEMA_REVISAO = {
+    "type": "object",
+    "properties": {
+        "veredictos": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "indice": {"type": "integer"},
+                    "veredito": {"type": "string",
+                                 "enum": ["mesma_pessoa", "incerto", "pessoas_diferentes"]},
+                    "motivo": {"type": "string"},
+                },
+                "required": ["indice", "veredito", "motivo"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["veredictos"],
+    "additionalProperties": False,
+}
+
+
+@st.cache_data(show_spinner=False)
+def ai_revisar_matches(payload: str):
+    """Claude dá veredicto nos matches ⚠️ feitos por nome (sem telefone batendo)."""
+    system = (
+        "Você revisa cruzamentos de clientes brasileiros feitos por NOME (o telefone não bateu). "
+        "Para cada par (nome no CRM × nome na lista de vendas), diga se é a mesma pessoa. "
+        "Considere: abreviações (Mª, Jr), sobrenomes de casada, apelidos comuns (Zé/José, Bia/Beatriz), "
+        "ordem dos sobrenomes. Nomes muito comuns com pouca informação (ex.: 'Maria Silva' × 'Maria Silva') "
+        "são 'incerto' — homônimos são frequentes. Só responda 'mesma_pessoa' quando o nome for "
+        "distintivo o suficiente. 'motivo' em até 12 palavras."
+    )
+    return _ai_call(system, payload, _SCHEMA_REVISAO)
+
+
+@st.cache_data(show_spinner=False)
+def ai_explicar_resultados(payload: str):
+    """Resumo executivo: o que os números significam e por que (ex.: 0 conversões)."""
+    system = (
+        "Você é o analista da Proc Aure, ferramenta que cruza listas de vendas com exports do Kommo "
+        "para atribuir vendas a tráfego pago e a disparos de WhatsApp. Receberá um JSON com os números "
+        "de um processamento. Escreva um resumo executivo em português, markdown, máximo 10 linhas: "
+        "1) o resultado principal em linguagem de dono de negócio; 2) SE houver algo estranho "
+        "(0 conversões, datas de disparo fora do período das vendas, muitas vendas sem telefone, "
+        "tag que não casou com nada), explique O PORQUÊ com os dados e diga o que fazer; "
+        "3) uma recomendação prática. Não invente números que não estão no JSON. "
+        "Não use jargão técnico. Seja direto — sem introduções."
+    )
+    return _ai_call(system, payload, max_tokens=2000)
+
+
 # ── Interface ──────────────────────────────────────────────────────────────────
 
 def _phone_preview(df: pd.DataFrame, col: Optional[str], is_auto: bool = False) -> str:
@@ -2542,6 +2769,29 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 st.divider()
+
+# ── Sidebar: Inteligência Claude (opcional) ────────────────────────────────────
+with st.sidebar:
+    st.markdown("### 🤖 Inteligência Claude")
+    if _get_api_key():
+        st.caption("✅ Conectado — recursos de IA ativos.")
+    else:
+        st.text_input(
+            "Chave da API da Anthropic", type="password", key="_ai_key_input",
+            help="Opcional — a ferramenta funciona normalmente sem IA. "
+                 "Crie a chave em console.anthropic.com → API Keys. "
+                 "No Streamlit Cloud, prefira configurar ANTHROPIC_API_KEY em "
+                 "Settings → Secrets para não precisar colar toda vez.",
+        )
+        if not _get_api_key():
+            st.caption("Sem chave: a ferramenta roda normal, só sem os recursos 🤖.")
+    _has_ai = bool(_get_api_key())
+    ai_auto = st.toggle(
+        "Análise automática ao processar", value=True, disabled=not _has_ai,
+        help="Após cada processamento, o Claude explica os resultados e revisa "
+             "os matches ⚠️ feitos por nome. Consome créditos da sua API "
+             "(centavos por processamento).",
+    )
 
 # ── Passo 1: Upload ────────────────────────────────────────────────────────────
 st.markdown('<div class="step-wrap"><div class="step-num">1</div><div class="step-text">Carregue as planilhas</div></div>', unsafe_allow_html=True)
@@ -2651,9 +2901,50 @@ if df_sales_raw is not None and df_kommo_raw is not None:
     auto_sn = detect_name_col(df_sales_raw)
     auto_kn = detect_name_col(df_kommo_raw)
 
+    # ── 🤖 IA: conferência de colunas (opcional) ──────────────────────────────
+    if _has_ai:
+        if st.button(
+            "🤖 Conferir colunas com IA",
+            help="O Claude analisa uma amostra das planilhas (telefones mascarados) "
+                 "e confere/corrige as colunas detectadas automaticamente.",
+        ):
+            with st.spinner("🤖 Claude analisando as planilhas..."):
+                st.session_state["_ai_cols_v"] = _ai_safe(
+                    ai_mapear_colunas, _ai_payload_planilha(df_sales_raw, "lista de vendas"))
+                st.session_state["_ai_cols_k"] = _ai_safe(
+                    ai_mapear_colunas, _ai_payload_planilha(df_kommo_raw, "export do Kommo"))
+    _ai_v_res, _ai_v_err = st.session_state.get("_ai_cols_v", (None, None))
+    _ai_k_res, _ai_k_err = st.session_state.get("_ai_cols_k", (None, None))
+    for _ai_e in (_ai_v_err, _ai_k_err):
+        if _ai_e:
+            st.warning(f"🤖 {_ai_e}")
+
+    def _ai_pick(res: Optional[dict], papel: str, df: pd.DataFrame, fallback):
+        c = (res or {}).get(papel)
+        return c if (c and c in df.columns) else fallback
+
+    if _ai_v_res:
+        auto_sp = _ai_pick(_ai_v_res, "telefone", df_sales_raw, auto_sp)
+        auto_sn = _ai_pick(_ai_v_res, "nome", df_sales_raw, auto_sn)
+        auto_vl = _ai_pick(_ai_v_res, "valor", df_sales_raw, auto_vl)
+        if _ai_v_res.get("observacao"):
+            st.info(f"🤖 **Vendas:** {_ai_v_res['observacao']}")
+    if _ai_k_res:
+        auto_kp = _ai_pick(_ai_k_res, "telefone", df_kommo_raw, auto_kp)
+        auto_kt = _ai_pick(_ai_k_res, "tags", df_kommo_raw, auto_kt)
+        auto_kn = _ai_pick(_ai_k_res, "nome", df_kommo_raw, auto_kn)
+        if _ai_k_res.get("observacao"):
+            st.info(f"🤖 **Kommo:** {_ai_k_res['observacao']}")
+
     def _idx(df, col):
         cols = list(df.columns)
         return cols.index(col) if col in cols else 0
+
+    # Campos de palavra-chave com estado — permite que a IA os preencha
+    for _k, _v in (("traffic_kw", "trafego"), ("traffic_exclude", ""),
+                   ("disparo_kw", "disparo"), ("disparo_exclude", "")):
+        if _k not in st.session_state:
+            st.session_state[_k] = _v
 
     c1, c2, c3, c4 = st.columns(4)
     with c1:
@@ -2688,19 +2979,57 @@ if df_sales_raw is not None and df_kommo_raw is not None:
     with c4:
         traffic_keyword = st.text_input(
             "Tag de tráfego — palavra-chave",
-            value="trafego",
+            key="traffic_kw",
             placeholder="Cole aqui como está no Kommo...",
             help="Trecho da tag de tráfego como aparece no Kommo. Ignora maiúsculas e acentos. "
                  "Pode pôr VÁRIAS separadas por vírgula (qualquer uma serve): 'trafego, pago, ads'.",
         )
         traffic_exclude = st.text_input(
             "Excluir tags com *(opcional)*",
-            value="",
             placeholder="ex: organico",
             help="Se preencher, leads cuja tag contém estas palavras NÃO contam como tráfego. "
                  "Útil pra separar 'Tráfego Pago' de 'Tráfego Orgânico'. Várias separadas por vírgula.",
             key="traffic_exclude",
         )
+
+    # ── 🤖 IA: sugestão de tags (opcional) ────────────────────────────────────
+    def _tag_counts_json(df: Optional[pd.DataFrame], col: Optional[str], top: int = 60) -> dict:
+        if df is None or not col or col not in df.columns:
+            return {}
+        vc = (df[col].fillna("").astype(str).str.split(",").explode().str.strip()
+              .loc[lambda s: s != ""].value_counts().head(top))
+        return {str(k): int(v) for k, v in vc.items()}
+
+    def _cb_sugerir_tags(payload: str):
+        res, err = _ai_safe(ai_sugerir_tags, payload)
+        if err:
+            st.session_state["_ai_tags_note"] = ("erro", err)
+            return
+        for campo, chave in (("trafego_incluir", "traffic_kw"),
+                             ("trafego_excluir", "traffic_exclude"),
+                             ("disparo_incluir", "disparo_kw"),
+                             ("disparo_excluir", "disparo_exclude")):
+            val = (res.get(campo) or "").strip()
+            if campo.endswith("incluir") and not val:
+                continue  # não apaga a palavra-chave se a IA não achou o grupo
+            st.session_state[chave] = val
+        st.session_state["_ai_tags_note"] = ("ok", res.get("explicacao", "Tags preenchidas."))
+
+    if _has_ai:
+        _disp_tag_auto = detect_tag_col(df_kommo_disparo_raw) if df_kommo_disparo_raw is not None else None
+        _tags_payload = json.dumps({
+            "tags_do_kommo": _tag_counts_json(df_kommo_raw, kommo_tag_col),
+            "tags_do_kommo_disparo": _tag_counts_json(df_kommo_disparo_raw, _disp_tag_auto),
+        }, ensure_ascii=False)
+        st.button(
+            "🤖 Sugerir tags com IA",
+            on_click=_cb_sugerir_tags, args=(_tags_payload,),
+            help="O Claude lê as tags dos seus leads e preenche os campos de "
+                 "tráfego e de disparo (incluindo exclusões) automaticamente.",
+        )
+        _ai_tags_note = st.session_state.get("_ai_tags_note")
+        if _ai_tags_note:
+            (st.warning if _ai_tags_note[0] == "erro" else st.info)(f"🤖 {_ai_tags_note[1]}")
 
     # Colunas de nome (fallback quando telefone não bate)
     none_val = "(não usar)"
@@ -2753,6 +3082,8 @@ if df_sales_raw is not None and df_kommo_raw is not None:
 
     auto_kd = detect_date_col(df_kommo_disp)
     auto_sd = detect_date_col(df_sales_raw)
+    if _ai_v_res and _ai_v_res.get("data") in df_sales_raw.columns:
+        auto_sd = _ai_v_res["data"]  # IA conferiu a coluna de data da venda
 
     # Se há segundo Kommo, deixa o usuário escolher as colunas dele
     if df_kommo_disparo_raw is not None:
@@ -2785,7 +3116,6 @@ if df_sales_raw is not None and df_kommo_raw is not None:
     with e1:
         disparo_keyword = st.text_input(
             "Tag de disparo — palavra-chave",
-            value="disparo",
             placeholder="Cole aqui como está a tag no Kommo...",
             help="Trecho da tag de disparo como aparece no Kommo. Ignora maiúsculas e acentos. "
                  "Pode pôr várias separadas por vírgula (qualquer uma serve). "
@@ -2794,7 +3124,6 @@ if df_sales_raw is not None and df_kommo_raw is not None:
         )
         disparo_exclude = st.text_input(
             "Excluir tags com *(opcional)*",
-            value="",
             placeholder="ex: teste",
             help="Leads cuja tag contém estas palavras NÃO contam como disparo. Várias por vírgula.",
             key="disparo_exclude",
@@ -3080,6 +3409,108 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                     f"Total único de compradores: **{n_total_uniq}**. "
                     f"Detalhes na coluna **'Origem da Venda'** do Excel."
                 )
+
+            # ── 🤖 Análise do Claude ────────────────────────────────────────────
+            if _has_ai and ai_auto:
+                st.divider()
+                st.markdown('<div class="step-wrap"><div class="step-num">🤖</div><div class="step-text">Análise do Claude</div></div>', unsafe_allow_html=True)
+
+                # 1) Revisão dos matches ⚠️ por nome (tráfego + disparo, até 30)
+                _pares = []
+                if sales_name_col:
+                    _fontes = [("tráfego", df_result)]
+                    if disp_sim_df is not None:
+                        _fontes.append(("disparo", disp_sim_df))
+                    for _origem, _df_f in _fontes:
+                        if _df_f is None or len(_df_f) == 0:
+                            continue
+                        for _, _r in _df_f.iterrows():
+                            if "Nome" not in str(_r.get("Criterio_Match", "")):
+                                continue
+                            _pares.append({
+                                "indice": len(_pares),
+                                "nome_no_kommo": str(_r.get("Nome_Kommo", "")),
+                                "nome_na_venda": str(_r.get(f"[Venda] {sales_name_col}", "")),
+                                "origem": _origem,
+                            })
+                            if len(_pares) >= 30:
+                                break
+                        if len(_pares) >= 30:
+                            break
+                if _pares:
+                    with st.spinner(f"🤖 Revisando {len(_pares)} matches por nome..."):
+                        _rev, _rev_err = _ai_safe(
+                            ai_revisar_matches,
+                            json.dumps({"pares": _pares}, ensure_ascii=False))
+                    if _rev_err:
+                        st.warning(f"🤖 Revisão de matches indisponível: {_rev_err}")
+                    elif _rev:
+                        _emoji = {"mesma_pessoa": "✅", "incerto": "🤔",
+                                  "pessoas_diferentes": "❌"}
+                        _vlist = _rev.get("veredictos", [])
+                        _n_susp = sum(1 for v in _vlist
+                                      if v.get("veredito") != "mesma_pessoa")
+                        _titulo = f"🤖 Revisão dos {len(_pares)} matches por nome (⚠️)"
+                        if _n_susp:
+                            _titulo += f" — {_n_susp} merecem conferência"
+                        with st.expander(_titulo, expanded=_n_susp > 0):
+                            for v in _vlist:
+                                try:
+                                    p = _pares[int(v.get("indice", -1))]
+                                except (IndexError, ValueError, TypeError):
+                                    continue
+                                st.markdown(
+                                    f"{_emoji.get(v.get('veredito'), '❓')} "
+                                    f"**{p['nome_no_kommo']}** × **{p['nome_na_venda']}** "
+                                    f"({p['origem']}) — {v.get('motivo', '')}"
+                                )
+                            st.caption("Veredicto do Claude sobre os matches sem telefone batendo. "
+                                       "Confirme os ❌ e 🤔 antes de fechar o relatório.")
+
+                # 2) Resumo executivo dos números
+                _crit_traf = (df_result["Criterio_Match"].value_counts().to_dict()
+                              if len(df_result) > 0 else {})
+                _datas_venda = None
+                if sales_date_col:
+                    _dts = [d for d in df_sales_raw[sales_date_col].head(2000).apply(parse_date)
+                            if _is_real_datetime(d)]
+                    if _dts:
+                        _datas_venda = {"de": min(_dts).strftime("%d/%m/%Y"),
+                                        "ate": max(_dts).strftime("%d/%m/%Y")}
+                _datas_disp: dict = {}
+                if considerar_disparo and disparo_keyword.strip():
+                    _mask_d = df_kommo_disp[kommo_disp_tag_col].fillna("").astype(str).apply(
+                        lambda t: _tag_matches(t, disparo_keyword, disparo_exclude))
+                    for _t in df_kommo_disp.loc[_mask_d, kommo_disp_tag_col].astype(str).head(800):
+                        for _seg in _t.split(","):
+                            if _tag_matches(_seg, disparo_keyword, disparo_exclude):
+                                _dd = parse_date(_seg)
+                                if _is_real_datetime(_dd):
+                                    _k = _dd.strftime("%d/%m/%Y")
+                                    _datas_disp[_k] = _datas_disp.get(_k, 0) + 1
+                _payload_resumo = json.dumps({
+                    "vendas": {"total": int(n_sales_total), "com_telefone": int(n_com_tel),
+                               "sem_telefone": int(n_sem_tel), "periodo": _datas_venda},
+                    "kommo": {"leads": int(len(dk_t)),
+                              "top_tags": _tag_counts_json(df_kommo_raw, kommo_tag_col, 12)},
+                    "trafego": {"palavra_chave": traffic_keyword, "excluir": traffic_exclude,
+                                "leads_com_tag": int(total_traffic),
+                                "conversoes": int(confirmed),
+                                "criterios_de_match": {k: int(v) for k, v in _crit_traf.items()},
+                                "bloqueados_por_ddd_divergente": int(df_full.attrs.get("n_ddd_blocked", 0))},
+                    "disparo": {"palavra_chave": disparo_keyword,
+                                "analisado": bool(considerar_disparo and disparo_keyword.strip()),
+                                "leads_de_disparo": int(disp_total),
+                                "conversoes_na_janela_30d": int(disp_conv),
+                                "datas_dos_disparos_extraidas_das_tags": _datas_disp},
+                    "sobreposicao_trafego_e_disparo": int(n_overlap),
+                }, ensure_ascii=False, default=str)
+                with st.spinner("🤖 Gerando análise executiva..."):
+                    _txt, _txt_err = _ai_safe(ai_explicar_resultados, _payload_resumo)
+                if _txt_err:
+                    st.caption(f"🤖 Análise executiva indisponível: {_txt_err}")
+                elif _txt:
+                    st.markdown(_txt)
 
             # ── Mês a mês (quando a planilha de vendas tem várias abas) ──────────
             if df_breakdown is not None and len(df_breakdown) > 0:
