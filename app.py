@@ -1084,6 +1084,8 @@ def _build_extended_lookup(
     lookup: dict = {}
     lookup_source: dict = {}
     rows_dict = ds_with_meta.to_dict("index")  # pré-computa uma vez
+    for _idx, _row in rows_dict.items():
+        _row["_venda_idx"] = _idx  # identidade da linha de venda — dedup por VENDA
 
     phone_cols = []
     for col in df.columns:
@@ -1152,6 +1154,8 @@ def run_procv(
     name_word_index: dict = {}
     if sales_name_col and sales_name_col in df_sales.columns:
         _rows_dict = ds.to_dict("index")
+        for _i2, _r2 in _rows_dict.items():
+            _r2["_venda_idx"] = _i2
         _name_count: dict = {}
         for idx in df_sales.index:
             raw = df_sales.at[idx, sales_name_col]
@@ -1260,6 +1264,7 @@ def run_procv(
             "É_Tráfego": "SIM" if is_traffic else "NÃO",
             "Venda_Confirmada": "SIM" if sales_match else "NÃO",
             "Criterio_Match": match_reason,
+            "_Venda_Idx": str(sales_match.get("_venda_idx", "")) if sales_match else "",
         }
         if sales_match:
             for col in sales_cols:
@@ -1285,6 +1290,19 @@ def run_procv(
         df_com_tel = df_trafego[mask_tel].drop_duplicates(subset=["Tel_8dig"])
         df_sem_tel = df_trafego[~mask_tel]
         df_trafego = pd.concat([df_com_tel, df_sem_tel], ignore_index=True)
+        # A MESMA venda casada por números diferentes (fixo numa coluna, celular
+        # noutra — mesma pessoa) também conta uma vez só.
+        mask_idx = df_trafego["_Venda_Idx"].str.len() > 0
+        df_trafego = pd.concat([
+            df_trafego[mask_idx].drop_duplicates(subset=["_Venda_Idx"]),
+            df_trafego[~mask_idx],
+        ], ignore_index=True)
+
+    # Coluna interna de dedup não vai para o relatório (preserva attrs no drop)
+    df_trafego = df_trafego.drop(columns=["_Venda_Idx"], errors="ignore")
+    _full_attrs = dict(df_full.attrs)
+    df_full = df_full.drop(columns=["_Venda_Idx"], errors="ignore")
+    df_full.attrs.update(_full_attrs)
 
     return ds, dk, df_trafego, df_full
 
@@ -1552,6 +1570,11 @@ def run_disparo(
     added_sale_keys: set = set()    # (sub8, idx)
     sales_lookup: dict = {}
     sales_lookup_source: dict = {}  # {sub8: col_name}
+
+    def _sale_payload(idx):
+        d = ds.loc[idx].to_dict()
+        d["_venda_idx"] = idx  # identidade da linha de venda — dedup por VENDA
+        return d
     phone_cols_sales = [c for c in df_sales.columns
                         if not _is_doc_col(c) and _is_phone_col(df_sales[c].dropna())]
     for col in phone_cols_sales:
@@ -1559,7 +1582,7 @@ def run_disparo(
             for ddd, sub8 in _phone_keys_in_cell(raw):
                 if (sub8, idx) in added_sale_keys:
                     continue
-                sales_lookup.setdefault(sub8, []).append((ddd, ds.loc[idx].to_dict()))
+                sales_lookup.setdefault(sub8, []).append((ddd, _sale_payload(idx)))
                 added_sale_keys.add((sub8, idx))
                 sales_lookup_source.setdefault(sub8, col)
     # Telefones soltos fora das colunas de telefone (número fora da coluna)
@@ -1572,7 +1595,7 @@ def run_disparo(
             for ddd, sub8 in _phone_keys_in_cell(raw, strict=True):
                 if ddd is None or (sub8, idx) in added_sale_keys:
                     continue
-                sales_lookup.setdefault(sub8, []).append((ddd, ds.loc[idx].to_dict()))
+                sales_lookup.setdefault(sub8, []).append((ddd, _sale_payload(idx)))
                 added_sale_keys.add((sub8, idx))
                 sales_lookup_source.setdefault(sub8, f"solto em {col}")
 
@@ -1581,6 +1604,8 @@ def run_disparo(
     disp_name_word_index: dict = {}
     if sales_name_col and sales_name_col in df_sales.columns:
         _ds_rows = ds.to_dict("index")
+        for _i3, _r3 in _ds_rows.items():
+            _r3["_venda_idx"] = _i3
         _nc: dict = {}
         for _idx in df_sales.index:
             _raw = df_sales.at[_idx, sales_name_col]
@@ -1739,6 +1764,7 @@ def run_disparo(
             "Tag_Kommo": tag_raw,
             "Telefone_Disparo": tel_raw,
             "Tel_8dig": _row_ident(matched_ddd, matched_sub8, tel_raw),
+            "_Venda_Idx": str(matched_sale.get("_venda_idx", "")) if matched_sale else "",
         }
 
         if kommo_date_col:
@@ -1785,7 +1811,13 @@ def run_disparo(
                       .drop_duplicates(subset=["Tel_8dig"]))
         df_sem_tel = df_res[~mask_tel]
         df_res = pd.concat([df_com_tel, df_sem_tel], ignore_index=True)
-    return df_res
+        # Mesma venda casada por números diferentes da mesma pessoa → conta uma vez
+        mask_idx = df_res["_Venda_Idx"].str.len() > 0
+        df_res = pd.concat([
+            df_res[mask_idx].drop_duplicates(subset=["_Venda_Idx"]),
+            df_res[~mask_idx],
+        ], ignore_index=True)
+    return df_res.drop(columns=["_Venda_Idx"], errors="ignore")
 
 
 # ── Breakdown por aba/mês ───────────────────────────────────────────────────────

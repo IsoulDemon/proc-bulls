@@ -473,6 +473,41 @@ def test_regressoes_dados_reais():
     ck("nome 1 palavra não casa; 2 palavras casa", len(traf9) == 1 and "Nome" in (crits[0] if crits else ""),
        f"traf={len(traf9)} crits={crits}")
 
+    # 10) Mesma pessoa com 2 números em colunas diferentes (fixo + celular),
+    #     2 leads casando um em cada número → 1 conversão, não 2.
+    sales10 = pd.DataFrame({
+        "Cliente": ["Ana Lima"],
+        "TELEFONE1": ["(11) 3333-4444"],
+        "TELEFONE2": ["(11) 98888-7777"],
+    })
+    kommo10 = pd.DataFrame({
+        "Celular": ["1133334444", "11988887777"],
+        "Tags": ["TRAFEGO", "TRAFEGO"],
+    })
+    _, _, traf10, _ = app.run_procv(sales10, "TELEFONE1", kommo10, "Celular", "Tags", "trafego")
+    ck("mesma venda por 2 números ≠ 2 conversões (tráfego)", len(traf10) == 1,
+       f"traf={len(traf10)}")
+    kommo10d = pd.DataFrame({
+        "Celular": ["1133334444", "11988887777"],
+        "Tags": ["DISPARO PROMO 10/06/26", "DISPARO PROMO 10/06/26"],
+    })
+    disp10 = app.run_disparo(sales10, "TELEFONE1", None, kommo10d, "Celular", "Tags",
+                             "disparo", None, 30)
+    n_sim10 = int((disp10["Venda_Confirmada"] == "SIM").sum()) if len(disp10) else 0
+    ck("mesma venda por 2 números ≠ 2 conversões (disparo)", n_sim10 == 1,
+       f"SIM={n_sim10}")
+    # E vendas genuinamente DIFERENTES do mesmo tipo continuam contando separado
+    sales10b = pd.DataFrame({
+        "Cliente": ["Ana Lima", "Bia Costa"],
+        "TELEFONE1": ["(11) 3333-4444", "(21) 96666-5555"],
+    })
+    kommo10b = pd.DataFrame({
+        "Celular": ["1133334444", "21966665555"],
+        "Tags": ["TRAFEGO", "TRAFEGO"],
+    })
+    _, _, traf10b, _ = app.run_procv(sales10b, "TELEFONE1", kommo10b, "Celular", "Tags", "trafego")
+    ck("vendas diferentes seguem contando separado", len(traf10b) == 2, f"traf={len(traf10b)}")
+
 
 # ════════════════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
