@@ -2508,7 +2508,7 @@ def _get_api_key() -> Optional[str]:
         key = st.secrets.get("ANTHROPIC_API_KEY")
     except Exception:
         pass
-    return key or os.environ.get("ANTHROPIC_API_KEY") or st.session_state.get("_ai_key_input")
+    return key or os.environ.get("ANTHROPIC_API_KEY") or st.session_state.get("_ai_key")
 
 
 def _mask_pii(v) -> str:
@@ -2551,7 +2551,11 @@ def _ai_call(system: str, user_text: str, schema: Optional[dict] = None,
     key = api_key or _get_api_key()
     if not key:
         raise _AIError("Sem chave de API configurada.")
-    import anthropic
+    try:
+        import anthropic
+    except ImportError:
+        raise _AIError("O pacote de IA ainda está sendo instalado no servidor — "
+                       "aguarde 1-2 minutos e recarregue a página.")
     try:
         client = anthropic.Anthropic(api_key=key)
         kwargs: dict = {}
@@ -2725,7 +2729,11 @@ def _ai_chat_reply(ctx: str, historico: list) -> tuple:
     key = _get_api_key()
     if not key:
         return None, "Sem chave de API configurada."
-    import anthropic
+    try:
+        import anthropic
+    except ImportError:
+        return None, ("O pacote de IA ainda está sendo instalado no servidor — "
+                      "aguarde 1-2 minutos e recarregue a página.")
     try:
         client = anthropic.Anthropic(api_key=key)
         msgs = [
@@ -2835,15 +2843,23 @@ st.divider()
 # ── Sidebar: Inteligência Claude (opcional) ────────────────────────────────────
 with st.sidebar:
     st.markdown("### 🤖 Inteligência Claude")
+    # Copia o valor digitado para um slot DURÁVEL da sessão: o Streamlit apaga
+    # o estado de widget que sai da tela — era o bug da chave "sumindo da
+    # caixinha" (e do chat mudo) assim que a caixinha virava "Conectado".
+    if st.session_state.get("_ai_key_input"):
+        st.session_state["_ai_key"] = st.session_state["_ai_key_input"]
     if _get_api_key():
         st.caption("✅ Conectado — recursos de IA ativos.")
+        if st.session_state.get("_ai_key") and st.button("🔁 Trocar chave"):
+            st.session_state.pop("_ai_key", None)
+            st.rerun()
     else:
         st.text_input(
             "Chave da API da Anthropic", type="password", key="_ai_key_input",
             help="Opcional — a ferramenta funciona normalmente sem IA. "
                  "Crie a chave em console.anthropic.com → API Keys. "
-                 "No Streamlit Cloud, prefira configurar ANTHROPIC_API_KEY em "
-                 "Settings → Secrets para não precisar colar toda vez.",
+                 "No Streamlit Cloud, configure ANTHROPIC_API_KEY em "
+                 "Settings → Secrets UMA vez para nunca mais precisar colar.",
         )
         if not _get_api_key():
             st.caption("Sem chave: a ferramenta roda normal, só sem os recursos 🤖.")
