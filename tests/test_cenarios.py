@@ -249,8 +249,8 @@ def test_procv():
     ck("F3 match por coluna alternativa do Kommo", len(traf) == 2, f"traf={len(traf)}")
 
     # F4: fallback por nome (telefone não bate)
-    sales = pd.DataFrame({"Nome": ["Joao Carlos Silva"], "Telefone": ["11988887777"], "Valor": ["100"]})
-    kommo = pd.DataFrame({"Celular": ["99999999999"], "Tags": ["trafego"], "Nome": ["Joao Carlos Silva"]})
+    sales = pd.DataFrame({"Nome": ["Joao Carlos Vesselai"], "Telefone": ["11988887777"], "Valor": ["100"]})
+    kommo = pd.DataFrame({"Celular": ["99999999999"], "Tags": ["trafego"], "Nome": ["Joao Carlos Vesselai"]})
     _, _, traf, _ = _procv(sales, "Telefone", kommo, "Celular", "Tags", "trafego",
                            sales_name_col="Nome", kommo_name_col="Nome")
     ck("F4 fallback por nome completo", len(traf) == 1, f"traf={len(traf)}")

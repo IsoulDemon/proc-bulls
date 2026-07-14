@@ -383,13 +383,22 @@ def detect_phone_col(df: pd.DataFrame) -> Optional[str]:
         hits = _phone_hits(col)
         if hits < 2:
             continue
-        sample_size = max(1, len(df[col].dropna().head(30)))
-        content_score = int((hits / sample_size) * 60)
+        sample = df[col].dropna().astype(str).head(30)
+        sample_size = max(1, len(sample))
+        content_score = (hits / sample_size) * 60
         name_bonus = 40 if _match_keywords(col, kws) else 0
-        # Cobertura desempata: 'Telefone comercial' com 700 números preenchidos
-        # vence 'Celular' com 240 — mais telefones = melhor coluna principal.
-        coverage_bonus = int(len(df[col].dropna()) / max(1, len(df)) * 15)
-        candidates.append((col, content_score + name_bonus + coverage_bonus))
+        # Cobertura desempata (contínuo, sem truncar): 'Celular 1' com 50
+        # preenchidos vence 'Telefone' com 48.
+        coverage_bonus = len(df[col].dropna()) / max(1, len(df)) * 15
+        # Celular > fixo: leads de CRM/WhatsApp casam por celular. Conta os
+        # números com o 9 de celular (11 díg. com DDD ou 9 sem DDD).
+        mobile_hits = sum(
+            1 for v in sample
+            for d in [clean_phone(v)]
+            if (len(d) == 11 and d[2] == "9") or (len(d) == 9 and d[0] == "9")
+        )
+        mobile_bonus = (mobile_hits / sample_size) * 8
+        candidates.append((col, content_score + name_bonus + coverage_bonus + mobile_bonus))
 
     if not candidates:
         return None
@@ -1072,6 +1081,42 @@ def _phone_keys_in_cell(raw, strict: bool = False) -> list:
     return keys
 
 
+def _kommo_row_phone_keys(df: pd.DataFrame, phone_col: str) -> list:
+    """Chaves (ddd, sub8) de telefone por linha do Kommo, coluna principal primeiro.
+
+    Depois das colunas de telefone, RESGATA números escondidos nas demais colunas
+    (ex.: telefone gravado no campo 'Email comercial' como 'p:+55...') — espelho
+    da varredura de soltos que já existia no lado das vendas. Solto exige DDD.
+    """
+    phone_cols = [phone_col] + [
+        c for c in df.columns
+        if c != phone_col and not _is_doc_col(c) and not str(c).startswith("_")
+        and _is_phone_col(df[c].dropna())
+    ]
+    row_keys: list = [[] for _ in range(len(df))]
+    for col in phone_cols:
+        if col not in df.columns:
+            continue
+        for i, raw in enumerate(df[col].tolist()):
+            for key in _phone_keys_in_cell(raw):
+                if all(key[1] != k[1] for k, _ in row_keys[i]):
+                    row_keys[i].append((key, col))
+    phone_set = set(phone_cols)
+    for col in df.columns:
+        if col in phone_set or _is_doc_col(col) or str(col).startswith("_"):
+            continue
+        for i, raw in enumerate(df[col].tolist()):
+            s = str(raw)
+            if len(s) < 10 or len(re.sub(r"\D", "", s)) < 10:
+                continue
+            for key in _phone_keys_in_cell(raw, strict=True):
+                if key[0] is None:
+                    continue  # telefone solto só entra com DDD (precisão)
+                if all(key[1] != k[1] for k, _ in row_keys[i]):
+                    row_keys[i].append((key, f"solto em {col}"))
+    return row_keys
+
+
 def _build_extended_lookup(
     df: pd.DataFrame, ds_with_meta: pd.DataFrame
 ) -> tuple[dict, dict, int]:
@@ -1178,18 +1223,7 @@ def run_procv(
 
     # Pré-computa chaves de telefone (ddd, sub8) das colunas de telefone do Kommo por linha.
     # Lista de (key, col_name) por linha — coluna principal primeiro (prioridade).
-    kommo_phone_cols = [kommo_phone_col] + [
-        c for c in df_kommo.columns
-        if c != kommo_phone_col and not _is_doc_col(c) and _is_phone_col(dk[c].dropna())
-    ]
-    kommo_row_keys: list[list] = [[] for _ in range(len(dk))]
-    for col in kommo_phone_cols:
-        if col not in dk.columns:
-            continue
-        for i, raw in enumerate(dk[col].tolist()):
-            for key in _phone_keys_in_cell(raw):
-                if all(key[1] != k[1] for k, _ in kommo_row_keys[i]):
-                    kommo_row_keys[i].append((key, col))
+    kommo_row_keys = _kommo_row_phone_keys(dk, kommo_phone_col)
 
     # Pré-extrai colunas como listas — iterar listas é MUITO mais rápido que iterrows()
     _k8_col = dk["Tel_8dig_Kommo"].tolist()
@@ -1225,6 +1259,8 @@ def run_procv(
             sales_col = lookup_source.get(key[1], "")
             if str(sales_col).startswith("solto em "):
                 match_reason = f"Telefone solto nas vendas ({sales_col[9:]}) ⚠️ verificar"
+            elif str(kommo_col).startswith("solto em "):
+                match_reason = f"Telefone fora da coluna no Kommo ({str(kommo_col)[9:]}) ⚠️ verificar"
             elif kommo_col == kommo_phone_col and sales_col == sales_phone_col:
                 match_reason = "Telefone"
             elif kommo_col == kommo_phone_col:
@@ -1237,8 +1273,8 @@ def run_procv(
             kommo_name_raw = str(_name_col[i])
             kommo_norm = _normalize_name(kommo_name_raw)
             if kommo_norm:
-                if kommo_norm in name_lookup:
-                    # Exact normalized match
+                if kommo_norm in name_lookup and _nome_distintivo(kommo_norm.split()):
+                    # Exact normalized match (com ao menos uma palavra distintiva)
                     sales_match = name_lookup[kommo_norm]
                     match_reason = "Nome completo ⚠️ verificar"
                 else:
@@ -1357,10 +1393,33 @@ def _normalize_name(name: str) -> str:
     return " ".join(p for p in s.split() if p not in _NAME_STOP and len(p) > 1)
 
 
+# Nomes/sobrenomes mais comuns do Brasil: um match composto SÓ por eles não
+# identifica ninguém — "Maria José" × "Maria José" casa milhares de homônimos.
+_NOMES_GENERICOS = {
+    "maria", "jose", "ana", "joao", "antonio", "francisco", "carlos", "paulo",
+    "pedro", "lucas", "luiz", "luis", "marcos", "gabriel", "rafael", "daniel",
+    "marcelo", "bruno", "eduardo", "felipe", "fernanda", "juliana", "adriana",
+    "patricia", "aline", "camila", "amanda", "bruna", "leticia", "sandra",
+    "aparecida", "fatima", "lucia", "vera", "paula", "claudia",
+    "silva", "santos", "souza", "sousa", "oliveira", "costa", "pereira",
+    "lima", "alves", "ferreira", "rodrigues", "almeida", "nascimento",
+    "carvalho", "araujo", "ribeiro", "gomes", "martins", "barbosa", "rocha",
+    "dias", "nunes", "moreira", "cavalcante", "cavalcanti", "correia",
+    "junior", "filho", "neto",
+}
+
+
+def _nome_distintivo(tokens) -> bool:
+    """True se há ao menos UMA palavra fora da lista de nomes ultra-comuns."""
+    return any(t not in _NOMES_GENERICOS for t in tokens)
+
+
 def _names_match(name_a: str, name_b: str) -> bool:
     """
     True se os nomes normalizados são equivalentes.
-    Exige ≥ 2 palavras em comum cobrindo todo o nome mais curto.
+    Exige ≥ 2 palavras em comum cobrindo todo o nome mais curto, e que ao menos
+    uma palavra em comum seja DISTINTIVA (fora dos nomes mais comuns do Brasil) —
+    'Maria José' × 'Maria José Fonseca' não casa; 'Leila Puzzi' × 'Leila Puzzi da Silva' casa.
     Nomes de 1 palavra são ambíguos demais — não são considerados match.
     """
     na = _normalize_name(name_a)
@@ -1371,7 +1430,9 @@ def _names_match(name_a: str, name_b: str) -> bool:
     if len(pa) < 2 or len(pb) < 2:
         return False
     common = pa & pb
-    return len(common) >= min(len(pa), len(pb)) and len(common) >= 2
+    if len(common) < min(len(pa), len(pb)) or len(common) < 2:
+        return False
+    return _nome_distintivo(common)
 
 
 def _is_real_datetime(v) -> bool:
@@ -1630,18 +1691,7 @@ def run_disparo(
     # Pré-computa chaves (ddd, sub8) das colunas de telefone para cada lead de disparo.
     # Lista de (key, col_name) por linha — coluna principal primeiro (prioridade).
     df_disp_reset = df_disp_leads.reset_index(drop=True)
-    disp_phone_cols = [kommo_phone_col] + [
-        c for c in df_disp_reset.columns
-        if c != kommo_phone_col and not _is_doc_col(c) and _is_phone_col(df_disp_reset[c].dropna())
-    ]
-    disp_row_keys: list[list] = [[] for _ in range(len(df_disp_reset))]
-    for _col in disp_phone_cols:
-        if _col not in df_disp_reset.columns:
-            continue
-        for _i, raw in enumerate(df_disp_reset[_col].tolist()):
-            for key in _phone_keys_in_cell(raw):
-                if all(key[1] != k[1] for k, _ in disp_row_keys[_i]):
-                    disp_row_keys[_i].append((key, _col))
+    disp_row_keys = _kommo_row_phone_keys(df_disp_reset, kommo_phone_col)
 
     # Pré-extrai colunas como listas (evita iterrows()) — chave pra escalar no breakdown
     _d_phone = df_disp_reset[kommo_phone_col].tolist() if kommo_phone_col in df_disp_reset.columns else [""] * len(df_disp_reset)
@@ -1694,6 +1744,8 @@ def run_disparo(
             s_col = sales_lookup_source.get(sub8, sales_phone_col)
             if str(s_col).startswith("solto em "):
                 _mr = f"Telefone solto nas vendas ({s_col[9:]}) ⚠️ verificar"
+            elif str(k_col).startswith("solto em "):
+                _mr = f"Telefone fora da coluna no Kommo ({str(k_col)[9:]}) ⚠️ verificar"
             elif k_col == kommo_phone_col and s_col == sales_phone_col:
                 _mr = "Telefone"
             elif k_col == kommo_phone_col:
@@ -1730,7 +1782,7 @@ def run_disparo(
             name_candidate = None
             _nr = ""
             if kommo_norm:
-                if kommo_norm in disp_name_lookup:
+                if kommo_norm in disp_name_lookup and _nome_distintivo(kommo_norm.split()):
                     name_candidate = disp_name_lookup[kommo_norm]
                     _nr = "Nome completo ⚠️ verificar"
                 else:
@@ -3284,11 +3336,12 @@ if df_sales_raw is not None and df_kommo_raw is not None:
     # Nome é último recurso — e aqui o usuário pode desligá-lo de vez.
     usar_nome_fallback = st.checkbox(
         "Aceitar match por NOME quando nenhum telefone bater (entra marcado com ⚠️)",
-        value=True,
+        value=False,
         help="O cruzamento bate telefone com telefone: um cliente com 3 números cadastrados "
-             "casa por qualquer um deles, em qualquer coluna. O nome completo (2+ palavras, "
-             "único na planilha) é usado apenas quando NENHUM telefone bateu, sempre marcado "
-             "com ⚠️ para conferência. Desmarque para um resultado 100% por telefone.",
+             "casa por qualquer um deles, em qualquer coluna — inclusive número escondido "
+             "em campo de e-mail/observação. DESLIGADO por padrão para um resultado 100% "
+             "por telefone. Ligando, o nome completo só casa se tiver ao menos uma palavra "
+             "distintiva ('Maria José' sozinho não conta) e entra marcado com ⚠️.",
     )
     sales_name_col_match: Optional[str] = sales_name_col if usar_nome_fallback else None
 
@@ -3507,10 +3560,25 @@ if df_sales_raw is not None and df_kommo_raw is not None:
             n_overlap    = len(overlap_phones)
             n_total_uniq = len(trafego_phones | disparo_phones)
 
-            # Qualidade dos dados de vendas
+            # Qualidade dos dados de vendas — telefone em QUALQUER coluna conta
+            # (cliente com fixo vazio mas celular preenchido TEM telefone)
             n_sales_total  = len(df_sales_raw)
-            phones_series  = df_sales_raw[sales_phone_col].apply(
-                lambda v: right8(clean_phone(str(v))) if pd.notna(v) else "")
+            _sales_tel_cols = [c for c in df_sales_raw.columns
+                               if not _is_doc_col(c) and not str(c).startswith("_")
+                               and _is_phone_col(df_sales_raw[c].dropna())]
+            if sales_phone_col not in _sales_tel_cols:
+                _sales_tel_cols.insert(0, sales_phone_col)
+
+            def _tel_da_linha(row) -> str:
+                for _c in _sales_tel_cols:
+                    _v = row.get(_c)
+                    if pd.notna(_v):
+                        _s8 = right8(clean_phone(str(_v)))
+                        if _s8:
+                            return _s8
+                return ""
+
+            phones_series = df_sales_raw.apply(_tel_da_linha, axis=1)
             n_sem_tel = int((phones_series == "").sum())
             n_com_tel = n_sales_total - n_sem_tel
 
@@ -3739,11 +3807,14 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                 },
                 "como_a_ferramenta_cruza": (
                     "Varre TODAS as colunas com cara de telefone dos dois lados (não só a "
-                    "principal) e também números soltos fora delas; normaliza com/sem DDD, "
-                    "com/sem o 9, DDI 55, pontos/traços; o match exige DDD igual quando os "
-                    "dois lados têm DDD; fallback por nome (2+ palavras) marcado com ⚠️; "
-                    "deduplica por comprador (telefone) e por venda; disparo: vale a venda "
-                    "de 0 a 30 dias após a data do disparo (extraída da tag ou da coluna)."),
+                    "principal) e RESGATA números escondidos em outras colunas (ex.: telefone "
+                    "no campo de e-mail com prefixo 'p:+55'), nos dois lados; normaliza "
+                    "com/sem DDD, com/sem o 9, DDI 55, pontos/traços; o match exige DDD igual "
+                    "quando os dois lados têm DDD; fallback por nome é OPCIONAL (desligado "
+                    "por padrão), exige 2+ palavras com ao menos uma distintiva ('Maria José' "
+                    "sozinho não casa) e entra marcado com ⚠️; deduplica por comprador "
+                    "(telefone) e por venda; disparo: vale a venda de 0 a 30 dias após a "
+                    "data do disparo (extraída da tag ou da coluna)."),
                 "conversoes_de_trafego": _tbl_chat(df_result),
                 "conversoes_de_disparo": _tbl_chat(disp_sim_df),
                 "leads_de_trafego_que_NAO_converteram_amostra": _nao_conv_amostra,

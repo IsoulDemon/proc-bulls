@@ -274,8 +274,8 @@ def test_procv_confuso():
     ck("formatos divergentes (vendas formatado × kommo cru) casam", len(traf) == 2, f"traf={len(traf)}")
 
     # nome com título "Dr." deve casar com nome sem título
-    sales = pd.DataFrame({"Nome": ["Dr. João Carlos Silva"], "Telefone": ["11988887777"], "Valor": ["1"]})
-    kommo = pd.DataFrame({"Celular": ["99999999999"], "Tags": ["trafego"], "Nome": ["João Carlos Silva"]})
+    sales = pd.DataFrame({"Nome": ["Dr. João Carlos Vesselai"], "Telefone": ["11988887777"], "Valor": ["1"]})
+    kommo = pd.DataFrame({"Celular": ["99999999999"], "Tags": ["trafego"], "Nome": ["João Carlos Vesselai"]})
     _, _, traf, _ = app.run_procv(sales, "Telefone", kommo, "Celular", "Tags", "trafego",
                                   sales_name_col="Nome", kommo_name_col="Nome")
     ck("nome com título 'Dr.' casa com nome sem título", len(traf) == 1, f"traf={len(traf)}")
@@ -458,13 +458,13 @@ def test_regressoes_dados_reais():
 
     # 9) Nome de 1 palavra não casa (homônimos aos milhares); 2 palavras casa
     sales9 = pd.DataFrame({
-        "Cliente": ["MARCIA", "Maria Silva"],
+        "Cliente": ["MARCIA", "Maria Puzzi"],
         "Telefone": ["1133334444", "1133335555"],
     })
     kommo9 = pd.DataFrame({
         "Celular": ["66999871234", "66999875678"],
         "Tags": ["TRAFEGO", "TRAFEGO"],
-        "Nome completo": ["Marcia", "Maria Silva"],
+        "Nome completo": ["Marcia", "Maria Puzzi"],
     })
     _, _, traf9, full9 = app.run_procv(sales9, "Telefone", kommo9, "Celular", "Tags",
                                        "trafego", sales_name_col="Cliente",
@@ -507,6 +507,47 @@ def test_regressoes_dados_reais():
     })
     _, _, traf10b, _ = app.run_procv(sales10b, "TELEFONE1", kommo10b, "Celular", "Tags", "trafego")
     ck("vendas diferentes seguem contando separado", len(traf10b) == 2, f"traf={len(traf10b)}")
+
+    # 11) Telefone escondido em coluna que NÃO é de telefone no KOMMO
+    #     (ex.: 'p:+55...' no campo de e-mail) é resgatado para o cruzamento.
+    sales11 = pd.DataFrame({
+        "Cliente": ["Ana Lima", "Bia Costa"],
+        "Telefone": ["(11) 98888-7777", "(21) 97777-6666"],
+    })
+    kommo11 = pd.DataFrame({
+        "Celular": ["", ""],  # coluna principal vazia
+        "Email comercial": ["p:+5511988887777", "ana@email.com"],  # tel escondido no e-mail
+        "Tags": ["TRAFEGO", "TRAFEGO"],
+    })
+    _, _, traf11, _ = app.run_procv(sales11, "Telefone", kommo11, "Celular", "Tags", "trafego")
+    ck("telefone no campo de e-mail do Kommo é resgatado",
+       len(traf11) == 1 and "Email comercial" in str(traf11.iloc[0]["Criterio_Match"]) if len(traf11) else False,
+       f"traf={len(traf11)} crit={traf11.iloc[0]['Criterio_Match'] if len(traf11) else '—'}")
+
+    # 12) Entre 'Telefone' (fixo, menos preenchido) e 'Celular 1' (mais preenchido),
+    #     a coluna principal deve ser a de CELULAR — caso Villa Maria.
+    df12 = pd.DataFrame({
+        "Telefone": ["(31) 3333-4444"] * 8 + [None, None],
+        "Celular 1": [f"(31) 98888-77{i:02d}" for i in range(10)],
+    })
+    ck("celular mais preenchido vence fixo como coluna principal",
+       app.detect_phone_col(df12) == "Celular 1", str(app.detect_phone_col(df12)))
+
+    # 13) Nome 100% genérico NÃO casa ('Maria José' × 'Maria Jose Fonseca Pinto'
+    #     — caso real de falso positivo); com palavra distintiva, casa.
+    sales13 = pd.DataFrame({
+        "Cliente": ["MARIA JOSE FONSECA PINTO", "MARIA SILVA"],
+        "Telefone": ["1133334444", "1133335555"],
+    })
+    kommo13 = pd.DataFrame({
+        "Celular": ["6699111", "6699222"],  # telefones inválidos — só nome poderia casar
+        "Tags": ["TRAFEGO", "TRAFEGO"],
+        "Nome completo": ["Maria José", "Maria Silva"],
+    })
+    _, _, traf13, _ = app.run_procv(sales13, "Telefone", kommo13, "Celular", "Tags", "trafego",
+                                    sales_name_col="Cliente", kommo_name_col="Nome completo")
+    ck("nome só de palavras ultra-comuns não casa (exato nem parcial)",
+       len(traf13) == 0, f"traf={len(traf13)}")
 
 
 # ════════════════════════════════════════════════════════════════════════════
