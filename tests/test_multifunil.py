@@ -191,10 +191,49 @@ def test_performance():
     ck("combinado tem 5000 leads", kommo is not None and len(kommo) == 5000, None if kommo is None else f"n={len(kommo)}")
 
 
+def test_listas_de_vendas():
+    cat("N10. Várias LISTAS de vendas (uma por vendedora)")
+    # 3 vendedoras; a da Bia usa 'Celular' em vez de 'Telefone' (unificação)
+    ana = pd.DataFrame({"Cliente": ["A1", "A2"],
+                        "Telefone": ["11988880001", "11988880002"],
+                        "Valor": ["100,00", "200,00"]})
+    bia = pd.DataFrame({"Cliente": ["B1", "B2"],
+                        "Celular": ["21988880003", "21988880005"],
+                        "Valor": ["300,00", "150,00"]})
+    ca = pd.DataFrame({"Cliente": ["C1", "A1 de novo"],
+                       "Telefone": ["31988880004", "11988880001"],  # A1 repetida!
+                       "Valor": ["50,00", "80,00"]})
+    comb = app.combine_sales_sources([ana, bia, ca], ["Ana.xlsx", "Bia.csv", "Carla.xlsx"])
+    ck("combina 3 listas (6 vendas)", comb is not None and len(comb) == 6,
+       None if comb is None else f"n={len(comb)}")
+    ck("_Planilha marca a lista de origem",
+       sorted(comb["_Planilha"].unique()) == ["Ana", "Bia", "Carla"],
+       str(sorted(comb["_Planilha"].unique())))
+    tel_col = app.detect_phone_col(comb)
+    ck("coluna de telefone unificada entre as listas",
+       tel_col is not None and int(comb[tel_col].notna().sum()) == 6,
+       f"col={tel_col} preenchidos={int(comb[tel_col].notna().sum()) if tel_col else 0}")
+
+    kommo = pd.DataFrame({
+        "Celular": ["11988880001", "21988880003", "31988880004"],
+        "Tags": ["TRAFEGO", "TRAFEGO", "INSTAGRAM"],
+    })
+    # Total combinado: A1 (repetida em 2 listas) conta UMA vez
+    _, _, traf, _ = app.run_procv(comb, tel_col, kommo, "Celular", "Tags", "trafego")
+    ck("total combinado dedup entre listas (A1 conta 1×)", len(traf) == 2, f"traf={len(traf)}")
+
+    # Breakdown por lista: Ana=1 (A1), Bia=1, Carla=1 (A1 conta na lista dela também)
+    bd = app.run_breakdown_by_sheet(comb, tel_col, kommo, "Celular", "Tags", "trafego")
+    by = {r["Mês / Aba"]: r["Vendas de Tráfego"] for _, r in bd.iterrows()} if bd is not None else {}
+    ck("breakdown por vendedora (Ana=1, Bia=1, Carla=1)",
+       by == {"Ana": 1, "Bia": 1, "Carla": 1}, str(by))
+
+
 # ════════════════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
     for fn in (test_combinar, test_lead_repetido, test_colunas_diferentes, test_tag_em_um_funil,
-               test_cenario_completo, test_bordas, test_disparo_e_exclusao, test_performance):
+               test_cenario_completo, test_bordas, test_disparo_e_exclusao, test_performance,
+               test_listas_de_vendas):
         try:
             fn()
         except Exception as e:

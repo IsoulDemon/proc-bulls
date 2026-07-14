@@ -378,7 +378,7 @@ def detect_phone_col(df: pd.DataFrame) -> Optional[str]:
 
     candidates = []
     for col in df.columns:
-        if _match_keywords(col, skip_kws) or _id_re.search(str(col).lower()):
+        if str(col).startswith("_") or _match_keywords(col, skip_kws) or _id_re.search(str(col).lower()):
             continue
         hits = _phone_hits(col)
         if hits < 2:
@@ -409,6 +409,8 @@ def detect_phone_col(df: pd.DataFrame) -> Optional[str]:
 def detect_tag_col(df: pd.DataFrame) -> Optional[str]:
     kws = ["tag", "etiqueta", "label", "categoria", "tipo", "fonte", "origem"]
     for col in df.columns:
+        if str(col).startswith("_"):
+            continue
         if _match_keywords(col, kws):
             return col
     return None
@@ -431,7 +433,7 @@ def detect_name_col(df: pd.DataFrame) -> Optional[str]:
 
     for kw in kws:
         for col in df.columns:
-            if _match_keywords(col, skip_kws):
+            if str(col).startswith("_") or _match_keywords(col, skip_kws):
                 continue
             if kw in str(col).lower() and _has_text_content(col):
                 return col
@@ -488,8 +490,8 @@ def detect_value_col(df: pd.DataFrame) -> Optional[str]:
 
     candidates: list = []
     for col in df.columns:
-        col_lower = col.lower()
-        if any(kw in col_lower for kw in hard_skip) or _is_doc_col(col):
+        col_lower = str(col).lower()
+        if str(col).startswith("_") or any(kw in col_lower for kw in hard_skip) or _is_doc_col(col):
             continue
 
         sample = df[col].dropna().head(50)
@@ -1024,6 +1026,50 @@ def combine_kommo_sources(dfs: list, names: Optional[list] = None) -> Optional[p
     combined = _normalize_cols(pd.concat(out, ignore_index=True))
     combined.attrs["treatment_notes"] = (
         [f"{len(pairs)} arquivos do Kommo combinados (funis): " + " · ".join(notes)]
+    )
+    return combined
+
+
+def combine_sales_sources(dfs: list, names: Optional[list] = None) -> Optional[pd.DataFrame]:
+    """
+    Combina várias LISTAS DE VENDAS (ex.: uma por vendedora) num só DataFrame.
+
+    Cada lista vira um grupo na coluna '_Planilha' — o mesmo mecanismo do
+    breakdown mês a mês passa a entregar o resultado SEPARADO POR LISTA, e o
+    cruzamento principal entrega o total combinado (comprador repetido entre
+    listas conta uma vez). Colunas-chave com nomes diferentes entre as listas
+    (ex.: 'Telefone' numa, 'Celular' noutra) são unificadas.
+    """
+    pairs = [(d, (names[i] if names else f"Lista {i + 1}"))
+             for i, d in enumerate(dfs) if d is not None and len(d) > 0]
+    if not pairs:
+        return None
+    if len(pairs) == 1:
+        return pairs[0][0]
+
+    frames, stems, all_notes = [], [], []
+    for d, nm in pairs:
+        stem = re.sub(r"\.(xlsx|xlsm|xls|csv)$", "", str(nm), flags=re.I)
+        stems.append(stem)
+        all_notes.extend(f"'{stem}': {n}" for n in d.attrs.get("treatment_notes", []))
+        d = d.copy()
+        if "_Planilha" in d.columns:  # arquivo multi-aba: prefixa a aba com a lista
+            d["_Planilha"] = stem + " · " + d["_Planilha"].astype(str)
+        else:
+            d.insert(0, "_Planilha", stem)
+        if "_Score_Aba" not in d.columns:
+            d.insert(1, "_Score_Aba", 100)  # lista de vendas é sempre primária
+        frames.append(d)
+
+    for detector in (detect_phone_col, detect_name_col, detect_value_col, detect_date_col):
+        frames = _unify_key_cols(frames, detector)
+    aligned, _ = _align_columns(frames)
+    combined = _normalize_cols(pd.concat(aligned, ignore_index=True))
+    resumo = " · ".join(f"{s}: {len(d):,} vendas" for s, (d, _) in zip(stems, pairs))
+    combined.attrs["treatment_notes"] = (
+        [f"{len(pairs)} listas de vendas combinadas — {resumo}. "
+         f"O resultado sai por lista E com o total junto (comprador repetido entre listas conta 1× no total)."]
+        + all_notes
     )
     return combined
 
@@ -1568,7 +1614,7 @@ def detect_date_col(df: pd.DataFrame) -> Optional[str]:
 
     candidates: list = []
     for col in df.columns:
-        if _match_keywords(col, skip_kws):
+        if str(col).startswith("_") or _match_keywords(col, skip_kws):
             continue
         col_nonnull = df[col].dropna()
         # Meia dúzia de células soltas (data de emissão no rodapé do relatório)
@@ -2472,8 +2518,8 @@ def build_excel(
 
     # ── Aba: Mês a Mês (por aba) ──────────────────────────────────────
     if df_breakdown is not None and len(df_breakdown) > 0:
-        ws_bd = wb.create_sheet("📅 Mês a Mês")
-        _write_sheet(ws_bd, df_breakdown, "VENDAS POR MÊS / ABA (Kommo × cada aba)", "7B2FBE")
+        ws_bd = wb.create_sheet("📅 Por Lista-Mês")
+        _write_sheet(ws_bd, df_breakdown, "VENDAS POR LISTA / MÊS (Kommo × cada lista ou aba)", "7B2FBE")
 
     # ── Aba 3: Vendas — Tráfego ───────────────────────────────────────
     ws3 = wb.create_sheet("✅ Vendas — Tráfego")
@@ -2963,9 +3009,9 @@ def _show_treatment_notes(df: Optional[pd.DataFrame], origem: str) -> None:
             st.markdown(f"• {n}")
 
 
-def _load_multi(files) -> Optional[pd.DataFrame]:
-    """Carrega e COMBINA uma lista de arquivos do Kommo (ex.: vários funis).
-    Cada arquivo é lido por inteiro (todas as abas) e depois combinado num só."""
+def _load_multi(files, combiner=combine_kommo_sources) -> Optional[pd.DataFrame]:
+    """Carrega e COMBINA uma lista de arquivos (funis do Kommo ou listas de
+    vendas). Cada arquivo é lido por inteiro (todas as abas) e combinado."""
     dfs, names = [], []
     for f in files:
         b = f.read()
@@ -2974,7 +3020,7 @@ def _load_multi(files) -> Optional[pd.DataFrame]:
         if df is not None and len(df) > 0:
             dfs.append(df)
             names.append(f.name)
-    return combine_kommo_sources(dfs, names)
+    return combiner(dfs, names)
 
 
 st.markdown("""
@@ -3043,15 +3089,31 @@ st.markdown('<div class="step-wrap"><div class="step-num">1</div><div class="ste
 col_left, col_right = st.columns(2)
 
 with col_left:
-    st.markdown("#### 📊 Planilha de Vendas")
-    sales_file = st.file_uploader(
-        "Arraste ou clique (Excel ou CSV)",
+    st.markdown("#### 📊 Planilha(s) de Vendas")
+    sales_files = st.file_uploader(
+        "Arraste ou clique — pode soltar VÁRIAS listas (ex.: uma por vendedora)",
         type=["xlsx", "xls", "csv", "xlsm"],
         key="sales_upload",
-        help="Planilha do cliente com nome, telefone e valor de compra",
+        accept_multiple_files=True,
+        help="Planilha do cliente com nome, telefone e valor de compra. "
+             "Se o cliente manda uma lista por vendedora, solte todas aqui: "
+             "a ferramenta cruza cada uma com o Kommo e entrega o resultado "
+             "POR LISTA e o total combinado (comprador repetido conta 1× no total).",
     )
     df_sales_raw: Optional[pd.DataFrame] = None
-    if sales_file:
+    if sales_files and len(sales_files) > 1:
+        # Várias listas (ex.: uma por vendedora) → combina marcando a origem
+        df_sales_raw = _load_multi(sales_files, combine_sales_sources)
+        if df_sales_raw is not None:
+            st.success(f"✅ {len(sales_files)} listas combinadas · "
+                       f"{len(df_sales_raw):,} vendas · {len(df_sales_raw.columns)} colunas")
+            st.caption("📑 O resultado sai separado por lista (seção 'Por Lista / Mês') "
+                       "e com o total combinado.")
+            _show_treatment_notes(df_sales_raw, "Vendas")
+            with st.expander("Prévia"):
+                st.dataframe(df_sales_raw.head(6), use_container_width=True)
+    elif sales_files:
+        sales_file = sales_files[0]
         sales_bytes = sales_file.read()  # lê UMA vez aqui
         sales_sheets = _get_sheets_cached(sales_bytes, sales_file.name)
         selected_sales_sheets = sales_sheets
@@ -3817,6 +3879,8 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                     "data do disparo (extraída da tag ou da coluna)."),
                 "conversoes_de_trafego": _tbl_chat(df_result),
                 "conversoes_de_disparo": _tbl_chat(disp_sim_df),
+                "resultado_por_lista_ou_mes": (df_breakdown.astype(str).to_dict("records")
+                                              if (df_breakdown is not None and len(df_breakdown) > 0) else []),
                 "leads_de_trafego_que_NAO_converteram_amostra": _nao_conv_amostra,
                 "vendas_sem_telefone_amostra": _sem_tel_amostra,
             }, ensure_ascii=False, default=str)
@@ -3902,7 +3966,7 @@ if df_sales_raw is not None and df_kommo_raw is not None:
             # ── Mês a mês (quando a planilha de vendas tem várias abas) ──────────
             if df_breakdown is not None and len(df_breakdown) > 0:
                 st.divider()
-                st.markdown('<div class="step-wrap"><div class="step-num">📅</div><div class="step-text">Mês a Mês (por aba)</div></div>', unsafe_allow_html=True)
+                st.markdown('<div class="step-wrap"><div class="step-num">📅</div><div class="step-text">Por Lista / Mês (cada arquivo ou aba)</div></div>', unsafe_allow_html=True)
                 st.caption(
                     "Cada aba da planilha de vendas foi cruzada com o Kommo **separadamente**. "
                     "Um comprador recorrente conta em **cada mês** que comprou — diferente do total "

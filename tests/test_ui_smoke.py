@@ -37,7 +37,20 @@ def _mk_vendas() -> FakeUpload:
         "Data da Venda": ["10/06/2026", "12/06/2026", "15/06/2026"],
         "Valor": ["150,00", "200,00", "99,90"],
     }).to_excel(buf, index=False)
-    return FakeUpload(buf.getvalue(), "vendas.xlsx")
+    return FakeUpload(buf.getvalue(), "vendedora_ana.xlsx")
+
+
+def _mk_vendas2() -> FakeUpload:
+    # segunda vendedora, com o telefone noutra coluna ("Celular") — exercita
+    # a unificação de colunas-chave do combine_sales_sources
+    buf = io.BytesIO()
+    pd.DataFrame({
+        "Cliente": ["Duda Reis", "Eva Rocha"],
+        "Celular": ["(31) 95555-4444", "(31) 94444-3333"],
+        "Data da Venda": ["11/06/2026", "13/06/2026"],
+        "Valor": ["80,00", "120,00"],
+    }).to_excel(buf, index=False)
+    return FakeUpload(buf.getvalue(), "vendedora_duda.xlsx")
 
 
 def _mk_kommo() -> FakeUpload:
@@ -49,6 +62,8 @@ def _mk_kommo() -> FakeUpload:
 
 
 def _fake_uploader(label, *a, **kw):
+    if kw.get("key") == "sales_upload":
+        return [_mk_vendas(), _mk_vendas2()]  # 2 listas → combine_sales_sources
     if kw.get("accept_multiple_files"):
         return [_mk_kommo()] if kw.get("key") == "kommo_upload" else []
     return _mk_vendas()
