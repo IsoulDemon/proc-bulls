@@ -23,7 +23,7 @@ st.set_page_config(
     page_title="Proc Aure",
     page_icon="✨",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",  # painel 🤖 Inteligência Claude visível
 )
 
 # ── CSS ────────────────────────────────────────────────────────────────────────
@@ -2700,6 +2700,67 @@ def ai_revisar_matches(payload: str):
     return _ai_call(system, payload, _SCHEMA_REVISAO)
 
 
+_CHAT_SYSTEM = (
+    "Você é o analista da Proc Aure, conversando DENTRO da ferramenta com o usuário sobre um "
+    "processamento que acabou de rodar. O primeiro bloco da conversa traz o contexto em JSON: "
+    "o resumo dos números e as tabelas de conversões de tráfego e de disparo. "
+    "Responda dúvidas sobre ESSE resultado: por que um lead casou ou não, o que significa cada "
+    "critério de match (Telefone; Col. alt. = telefone achado em outra coluna; Nome ⚠️ = casou "
+    "só pelo nome, merece conferência; janela = venda até 30 dias após a data do disparo; "
+    "bloqueado por DDD = mesmo final de número em cidades diferentes, não conta). "
+    "Quando o usuário apontar um ERRO ou der uma informação nova (ex.: 'esses dois são a mesma "
+    "pessoa', 'essa tag não é de tráfego'), aceite a correção, use-a no resto da conversa e "
+    "registre-a numa linha final começando com '📌 Anotado:'. "
+    "Oriente correções práticas: mudar a palavra-chave da tag, escolher outra coluna, excluir "
+    "uma linha no Excel, reprocessar. Se a informação não estiver no contexto, diga isso "
+    "claramente e explique como verificar (ex.: olhar a aba 'Todos os Leads' do Excel). "
+    "Não invente números. Responda em português, direto e sem jargão."
+)
+
+
+def _ai_chat_reply(ctx: str, historico: list) -> tuple:
+    """Um turno do chat sobre o resultado. Retorna (texto, erro_amigável).
+    O contexto entra como primeiro bloco com cache — os turnos seguintes
+    reaproveitam o prefixo e custam centavos."""
+    key = _get_api_key()
+    if not key:
+        return None, "Sem chave de API configurada."
+    import anthropic
+    try:
+        client = anthropic.Anthropic(api_key=key)
+        msgs = [
+            {"role": "user", "content": [{
+                "type": "text",
+                "text": "CONTEXTO DO PROCESSAMENTO (JSON gerado pela Proc Aure):\n" + ctx,
+                "cache_control": {"type": "ephemeral"},
+            }]},
+            {"role": "assistant",
+             "content": "Recebi o contexto do processamento. Pode perguntar sobre o resultado."},
+        ]
+        for m in historico:
+            msgs.append({"role": m["role"], "content": m["content"]})
+        resp = client.messages.create(
+            model=_CLAUDE_MODEL,
+            max_tokens=3000,
+            thinking={"type": "adaptive"},
+            system=_CHAT_SYSTEM,
+            messages=msgs,
+        )
+        if resp.stop_reason == "refusal":
+            return None, "O Claude recusou esta solicitação."
+        return next((b.text for b in resp.content if b.type == "text"), ""), None
+    except anthropic.AuthenticationError:
+        return None, "Chave de API inválida — confira em console.anthropic.com."
+    except anthropic.RateLimitError:
+        return None, "Limite de requisições atingido — aguarde um minuto e tente de novo."
+    except anthropic.APIConnectionError:
+        return None, "Sem conexão com a API da Anthropic — verifique a internet."
+    except anthropic.APIStatusError as e:
+        return None, f"Erro da API ({e.status_code}) — tente novamente."
+    except Exception as e:
+        return None, f"Erro inesperado na IA: {type(e).__name__}."
+
+
 @st.cache_data(show_spinner=False)
 def ai_explicar_resultados(payload: str):
     """Resumo executivo: o que os números significam e por que (ex.: 0 conversões)."""
@@ -2792,6 +2853,25 @@ with st.sidebar:
         help="Após cada processamento, o Claude explica os resultados e revisa "
              "os matches ⚠️ feitos por nome. Consome créditos da sua API "
              "(centavos por processamento).",
+    )
+    if _has_ai:
+        st.caption("No passo 2 você verá os botões **🤖 Conferir colunas** e "
+                   "**🤖 Sugerir tags**; a análise do Claude aparece junto com os resultados.")
+
+# Selo de status da IA — sempre visível na página principal
+if _has_ai:
+    st.markdown(
+        '<p style="text-align:center;font-size:.92rem;color:#30D158;margin-top:-.4rem">'
+        '🤖 <b>Inteligência Claude ativa</b> — conferência de colunas e tags no passo 2 '
+        '· análise executiva e revisão de matches nos resultados</p>',
+        unsafe_allow_html=True,
+    )
+else:
+    st.markdown(
+        '<p style="text-align:center;font-size:.92rem;color:rgba(235,235,245,.5);margin-top:-.4rem">'
+        '🤖 Inteligência Claude <b>desligada</b> — cole sua chave da Anthropic '
+        'na barra lateral (à esquerda) para ativar os recursos de IA</p>',
+        unsafe_allow_html=True,
     )
 
 # ── Passo 1: Upload ────────────────────────────────────────────────────────────
@@ -2903,17 +2983,18 @@ if df_sales_raw is not None and df_kommo_raw is not None:
     auto_kn = detect_name_col(df_kommo_raw)
 
     # ── 🤖 IA: conferência de colunas (opcional) ──────────────────────────────
-    if _has_ai:
-        if st.button(
-            "🤖 Conferir colunas com IA",
-            help="O Claude analisa uma amostra das planilhas (telefones mascarados) "
-                 "e confere/corrige as colunas detectadas automaticamente.",
-        ):
-            with st.spinner("🤖 Claude analisando as planilhas..."):
-                st.session_state["_ai_cols_v"] = _ai_safe(
-                    ai_mapear_colunas, _ai_payload_planilha(df_sales_raw, "lista de vendas"))
-                st.session_state["_ai_cols_k"] = _ai_safe(
-                    ai_mapear_colunas, _ai_payload_planilha(df_kommo_raw, "export do Kommo"))
+    if st.button(
+        "🤖 Conferir colunas com IA",
+        disabled=not _has_ai,
+        help="O Claude analisa uma amostra das planilhas (telefones mascarados) "
+             "e confere/corrige as colunas detectadas automaticamente."
+             + ("" if _has_ai else " Para ativar, cole sua chave da Anthropic na barra lateral."),
+    ):
+        with st.spinner("🤖 Claude analisando as planilhas..."):
+            st.session_state["_ai_cols_v"] = _ai_safe(
+                ai_mapear_colunas, _ai_payload_planilha(df_sales_raw, "lista de vendas"))
+            st.session_state["_ai_cols_k"] = _ai_safe(
+                ai_mapear_colunas, _ai_payload_planilha(df_kommo_raw, "export do Kommo"))
     _ai_v_res, _ai_v_err = st.session_state.get("_ai_cols_v", (None, None))
     _ai_k_res, _ai_k_err = st.session_state.get("_ai_cols_k", (None, None))
     for _ai_e in (_ai_v_err, _ai_k_err):
@@ -2923,6 +3004,11 @@ if df_sales_raw is not None and df_kommo_raw is not None:
     def _ai_pick(res: Optional[dict], papel: str, df: pd.DataFrame, fallback):
         c = (res or {}).get(papel)
         return c if (c and c in df.columns) else fallback
+
+    def _ai_conferido(res: Optional[dict], papel: str, col) -> None:
+        """Selo visível quando o Claude conferiu/escolheu esta coluna."""
+        if res and col and res.get(papel) == col:
+            st.caption("🤖 Conferido pelo Claude")
 
     if _ai_v_res:
         auto_sp = _ai_pick(_ai_v_res, "telefone", df_sales_raw, auto_sp)
@@ -2958,6 +3044,7 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                  "que o DDD bata quando os dois lados têm, evitando juntar cidades diferentes.",
         )
         st.caption(_phone_preview(df_sales_raw, sales_phone_col, auto_sp == sales_phone_col))
+        _ai_conferido(_ai_v_res, "telefone", sales_phone_col)
     with c2:
         kommo_phone_col = st.selectbox(
             "Coluna de telefone — Kommo",
@@ -2967,6 +3054,7 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                  "Mesmo que o número esteja em outra coluna, a ferramenta testa todas automaticamente.",
         )
         st.caption(_phone_preview(df_kommo_raw, kommo_phone_col, auto_kp == kommo_phone_col))
+        _ai_conferido(_ai_k_res, "telefone", kommo_phone_col)
     with c3:
         kommo_tag_col = st.selectbox(
             "Coluna de tags — Kommo",
@@ -2977,6 +3065,7 @@ if df_sales_raw is not None and df_kommo_raw is not None:
         )
         if auto_kt == kommo_tag_col:
             st.caption("✨ Auto-detectado")
+        _ai_conferido(_ai_k_res, "tags", kommo_tag_col)
     with c4:
         traffic_keyword = st.text_input(
             "Tag de tráfego — palavra-chave",
@@ -3016,21 +3105,22 @@ if df_sales_raw is not None and df_kommo_raw is not None:
             st.session_state[chave] = val
         st.session_state["_ai_tags_note"] = ("ok", res.get("explicacao", "Tags preenchidas."))
 
-    if _has_ai:
-        _disp_tag_auto = detect_tag_col(df_kommo_disparo_raw) if df_kommo_disparo_raw is not None else None
-        _tags_payload = json.dumps({
-            "tags_do_kommo": _tag_counts_json(df_kommo_raw, kommo_tag_col),
-            "tags_do_kommo_disparo": _tag_counts_json(df_kommo_disparo_raw, _disp_tag_auto),
-        }, ensure_ascii=False)
-        st.button(
-            "🤖 Sugerir tags com IA",
-            on_click=_cb_sugerir_tags, args=(_tags_payload,),
-            help="O Claude lê as tags dos seus leads e preenche os campos de "
-                 "tráfego e de disparo (incluindo exclusões) automaticamente.",
-        )
-        _ai_tags_note = st.session_state.get("_ai_tags_note")
-        if _ai_tags_note:
-            (st.warning if _ai_tags_note[0] == "erro" else st.info)(f"🤖 {_ai_tags_note[1]}")
+    _disp_tag_auto = detect_tag_col(df_kommo_disparo_raw) if df_kommo_disparo_raw is not None else None
+    _tags_payload = json.dumps({
+        "tags_do_kommo": _tag_counts_json(df_kommo_raw, kommo_tag_col),
+        "tags_do_kommo_disparo": _tag_counts_json(df_kommo_disparo_raw, _disp_tag_auto),
+    }, ensure_ascii=False)
+    st.button(
+        "🤖 Sugerir tags com IA",
+        disabled=not _has_ai,
+        on_click=_cb_sugerir_tags, args=(_tags_payload,),
+        help="O Claude lê as tags dos seus leads e preenche os campos de "
+             "tráfego e de disparo (incluindo exclusões) automaticamente."
+             + ("" if _has_ai else " Para ativar, cole sua chave da Anthropic na barra lateral."),
+    )
+    _ai_tags_note = st.session_state.get("_ai_tags_note")
+    if _ai_tags_note:
+        (st.warning if _ai_tags_note[0] == "erro" else st.info)(f"🤖 {_ai_tags_note[1]}")
 
     # Colunas de nome (fallback quando telefone não bate)
     none_val = "(não usar)"
@@ -3048,6 +3138,7 @@ if df_sales_raw is not None and df_kommo_raw is not None:
         sales_name_col: Optional[str] = None if sales_name_col_sel == none_val else sales_name_col_sel
         if auto_sn == sales_name_col:
             st.caption("✨ Auto-detectado")
+        _ai_conferido(_ai_v_res, "nome", sales_name_col)
     with nm2:
         name_opts_k = [none_val] + list(df_kommo_raw.columns)
         name_default_k = name_opts_k.index(auto_kn) if auto_kn and auto_kn in name_opts_k else 0
@@ -3059,6 +3150,7 @@ if df_sales_raw is not None and df_kommo_raw is not None:
         kommo_name_col: Optional[str] = None if kommo_name_col_sel == none_val else kommo_name_col_sel
         if auto_kn == kommo_name_col:
             st.caption("✨ Auto-detectado")
+        _ai_conferido(_ai_k_res, "nome", kommo_name_col)
     with nm3:
         val_opts = [none_val] + list(df_sales_raw.columns)
         val_default = val_opts.index(auto_vl) if auto_vl and auto_vl in val_opts else 0
@@ -3071,6 +3163,7 @@ if df_sales_raw is not None and df_kommo_raw is not None:
         sales_value_col = None if sales_value_col_sel == none_val else sales_value_col_sel
         if auto_vl == sales_value_col:
             st.caption("✨ Auto-detectado")
+        _ai_conferido(_ai_v_res, "valor", sales_value_col)
 
     # ── Configuração de Disparo ────────────────────────────────────────────────
     st.markdown("##### 📣 Disparo")
@@ -3163,6 +3256,7 @@ if df_sales_raw is not None and df_kommo_raw is not None:
         sales_date_col = None if sales_date_sel == none_opt else sales_date_sel
         if auto_sd == sales_date_col:
             st.caption("✨ Auto-detectado")
+        _ai_conferido(_ai_v_res, "data", sales_date_col)
 
     if not kommo_date_col:
         st.caption("ℹ️ Sem coluna de data do disparo: a ferramenta tentará extrair a data do texto da tag automaticamente (ex: 'Disparo 22/04').")
@@ -3411,7 +3505,70 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                     f"Detalhes na coluna **'Origem da Venda'** do Excel."
                 )
 
+            # ── 🤖 Contexto do resultado (alimenta a análise E o chat) ─────────
+            _crit_traf = (df_result["Criterio_Match"].value_counts().to_dict()
+                          if len(df_result) > 0 else {})
+            _datas_venda = None
+            if sales_date_col:
+                _dts = [d for d in df_sales_raw[sales_date_col].head(2000).apply(parse_date)
+                        if _is_real_datetime(d)]
+                if _dts:
+                    _datas_venda = {"de": min(_dts).strftime("%d/%m/%Y"),
+                                    "ate": max(_dts).strftime("%d/%m/%Y")}
+            _datas_disp: dict = {}
+            if considerar_disparo and disparo_keyword.strip():
+                _mask_d = df_kommo_disp[kommo_disp_tag_col].fillna("").astype(str).apply(
+                    lambda t: _tag_matches(t, disparo_keyword, disparo_exclude))
+                for _t in df_kommo_disp.loc[_mask_d, kommo_disp_tag_col].astype(str).head(800):
+                    for _seg in _t.split(","):
+                        if _tag_matches(_seg, disparo_keyword, disparo_exclude):
+                            _dd = parse_date(_seg)
+                            if _is_real_datetime(_dd):
+                                _k = _dd.strftime("%d/%m/%Y")
+                                _datas_disp[_k] = _datas_disp.get(_k, 0) + 1
+            _resumo_dict = {
+                "vendas": {"total": int(n_sales_total), "com_telefone": int(n_com_tel),
+                           "sem_telefone": int(n_sem_tel), "periodo": _datas_venda},
+                "kommo": {"leads": int(len(dk_t)),
+                          "top_tags": _tag_counts_json(df_kommo_raw, kommo_tag_col, 12)},
+                "trafego": {"palavra_chave": traffic_keyword, "excluir": traffic_exclude,
+                            "leads_com_tag": int(total_traffic),
+                            "conversoes": int(confirmed),
+                            "criterios_de_match": {k: int(v) for k, v in _crit_traf.items()},
+                            "bloqueados_por_ddd_divergente": int(df_full.attrs.get("n_ddd_blocked", 0))},
+                "disparo": {"palavra_chave": disparo_keyword,
+                            "analisado": bool(considerar_disparo and disparo_keyword.strip()),
+                            "leads_de_disparo": int(disp_total),
+                            "conversoes_na_janela_30d": int(disp_conv),
+                            "datas_dos_disparos_extraidas_das_tags": _datas_disp},
+                "sobreposicao_trafego_e_disparo": int(n_overlap),
+            }
+            _payload_resumo = json.dumps(_resumo_dict, ensure_ascii=False, default=str)
+
+            def _tbl_chat(df: Optional[pd.DataFrame], n: int = 150) -> list:
+                """Tabela compacta das conversões para o chat 🤖."""
+                if df is None or len(df) == 0:
+                    return []
+                cols = [c for c in ("Origem", "Tag_Kommo", "Nome_Kommo", "Tel_8dig",
+                                    "Criterio_Match", "Data_Venda", "Dias_Após_Disparo")
+                        if c in df.columns]
+                for _c in (sales_name_col, sales_value_col, sales_date_col):
+                    if _c and f"[Venda] {_c}" in df.columns:
+                        cols.append(f"[Venda] {_c}")
+                return df[cols].head(n).astype(str).to_dict("records")
+
+            st.session_state["_ai_ctx"] = json.dumps({
+                "resumo": _resumo_dict,
+                "conversoes_de_trafego": _tbl_chat(df_result),
+                "conversoes_de_disparo": _tbl_chat(disp_sim_df),
+            }, ensure_ascii=False, default=str)
+            st.session_state.pop("_ai_chat", None)  # novo processamento → conversa nova
+
             # ── 🤖 Análise do Claude ────────────────────────────────────────────
+            if not _has_ai:
+                st.divider()
+                st.caption("🤖 Ative a **Inteligência Claude** na barra lateral para receber aqui "
+                           "a análise executiva, a revisão dos matches por nome e o chat sobre o resultado.")
             if _has_ai and ai_auto:
                 st.divider()
                 st.markdown('<div class="step-wrap"><div class="step-num">🤖</div><div class="step-text">Análise do Claude</div></div>', unsafe_allow_html=True)
@@ -3468,44 +3625,7 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                             st.caption("Veredicto do Claude sobre os matches sem telefone batendo. "
                                        "Confirme os ❌ e 🤔 antes de fechar o relatório.")
 
-                # 2) Resumo executivo dos números
-                _crit_traf = (df_result["Criterio_Match"].value_counts().to_dict()
-                              if len(df_result) > 0 else {})
-                _datas_venda = None
-                if sales_date_col:
-                    _dts = [d for d in df_sales_raw[sales_date_col].head(2000).apply(parse_date)
-                            if _is_real_datetime(d)]
-                    if _dts:
-                        _datas_venda = {"de": min(_dts).strftime("%d/%m/%Y"),
-                                        "ate": max(_dts).strftime("%d/%m/%Y")}
-                _datas_disp: dict = {}
-                if considerar_disparo and disparo_keyword.strip():
-                    _mask_d = df_kommo_disp[kommo_disp_tag_col].fillna("").astype(str).apply(
-                        lambda t: _tag_matches(t, disparo_keyword, disparo_exclude))
-                    for _t in df_kommo_disp.loc[_mask_d, kommo_disp_tag_col].astype(str).head(800):
-                        for _seg in _t.split(","):
-                            if _tag_matches(_seg, disparo_keyword, disparo_exclude):
-                                _dd = parse_date(_seg)
-                                if _is_real_datetime(_dd):
-                                    _k = _dd.strftime("%d/%m/%Y")
-                                    _datas_disp[_k] = _datas_disp.get(_k, 0) + 1
-                _payload_resumo = json.dumps({
-                    "vendas": {"total": int(n_sales_total), "com_telefone": int(n_com_tel),
-                               "sem_telefone": int(n_sem_tel), "periodo": _datas_venda},
-                    "kommo": {"leads": int(len(dk_t)),
-                              "top_tags": _tag_counts_json(df_kommo_raw, kommo_tag_col, 12)},
-                    "trafego": {"palavra_chave": traffic_keyword, "excluir": traffic_exclude,
-                                "leads_com_tag": int(total_traffic),
-                                "conversoes": int(confirmed),
-                                "criterios_de_match": {k: int(v) for k, v in _crit_traf.items()},
-                                "bloqueados_por_ddd_divergente": int(df_full.attrs.get("n_ddd_blocked", 0))},
-                    "disparo": {"palavra_chave": disparo_keyword,
-                                "analisado": bool(considerar_disparo and disparo_keyword.strip()),
-                                "leads_de_disparo": int(disp_total),
-                                "conversoes_na_janela_30d": int(disp_conv),
-                                "datas_dos_disparos_extraidas_das_tags": _datas_disp},
-                    "sobreposicao_trafego_e_disparo": int(n_overlap),
-                }, ensure_ascii=False, default=str)
+                # 2) Resumo executivo dos números (payload montado acima)
                 with st.spinner("🤖 Gerando análise executiva..."):
                     _txt, _txt_err = _ai_safe(ai_explicar_resultados, _payload_resumo)
                 if _txt_err:
@@ -3597,6 +3717,50 @@ if df_sales_raw is not None and df_kommo_raw is not None:
 
 else:
     st.info("⬆️ Carregue as duas planilhas acima para continuar.")
+
+# ── 💬 Chat com o Claude sobre o resultado ─────────────────────────────────────
+# Fora do bloco de processamento: o contexto fica na sessão e a conversa
+# sobrevive aos reruns (cada mensagem do chat re-executa o script).
+if st.session_state.get("_ai_ctx"):
+    st.divider()
+    st.markdown('<div class="step-wrap"><div class="step-num">💬</div><div class="step-text">Converse com o Claude sobre este resultado</div></div>', unsafe_allow_html=True)
+    try:
+        _ctx_resumo = json.loads(st.session_state["_ai_ctx"]).get("resumo", {})
+        st.caption(
+            f"Contexto carregado: **{_ctx_resumo.get('vendas', {}).get('total', '?')} vendas** · "
+            f"**{_ctx_resumo.get('trafego', {}).get('conversoes', '?')} conversões de tráfego** · "
+            f"**{_ctx_resumo.get('disparo', {}).get('conversoes_na_janela_30d', '?')} de disparo**. "
+            "O Claude responde sobre ESTE processamento — pergunte, questione, corrija."
+        )
+    except Exception:
+        pass
+    if not _has_ai:
+        st.caption("🤖 Cole sua chave da Anthropic na barra lateral para conversar sobre o resultado.")
+    else:
+        _hist = st.session_state.setdefault("_ai_chat", [])
+        _licoes = [ln.strip() for m in _hist if m["role"] == "assistant"
+                   for ln in m["content"].split("\n") if ln.strip().startswith("📌")]
+        if _licoes:
+            with st.expander(f"📌 {len(_licoes)} lição(ões) que o Claude anotou nesta conversa"):
+                for ln in _licoes:
+                    st.markdown(f"- {ln.removeprefix('📌').strip()}")
+        for _m in _hist:
+            with st.chat_message(_m["role"], avatar=("🧑‍💼" if _m["role"] == "user" else "🤖")):
+                st.markdown(_m["content"])
+        _pergunta = st.chat_input("Ex.: por que a venda da Maria não apareceu no tráfego?")
+        if _pergunta:
+            _hist.append({"role": "user", "content": _pergunta})
+            with st.chat_message("user", avatar="🧑‍💼"):
+                st.markdown(_pergunta)
+            with st.chat_message("assistant", avatar="🤖"):
+                with st.spinner("🤖 Analisando o resultado..."):
+                    _resp_chat, _err_chat = _ai_chat_reply(st.session_state["_ai_ctx"], _hist)
+                if _err_chat:
+                    st.warning(f"🤖 {_err_chat}")
+                    _hist.pop()  # devolve a pergunta — um erro não trava a conversa
+                else:
+                    st.markdown(_resp_chat)
+                    _hist.append({"role": "assistant", "content": _resp_chat})
 
 # ── Rodapé ─────────────────────────────────────────────────────────────────────
 st.markdown("---")
