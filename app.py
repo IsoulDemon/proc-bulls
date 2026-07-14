@@ -3196,19 +3196,6 @@ if df_sales_raw is not None and df_kommo_raw is not None:
             key="traffic_exclude",
         )
 
-    # O PROCV é telefone-first: todas as colunas de telefone dos DOIS lados são
-    # varridas (cliente com 3 números casa por qualquer um; dedup por venda).
-    # Nome é último recurso — e aqui o usuário pode desligá-lo de vez.
-    usar_nome_fallback = st.checkbox(
-        "Aceitar match por NOME quando nenhum telefone bater (entra marcado com ⚠️)",
-        value=True,
-        help="O cruzamento bate telefone com telefone: um cliente com 3 números cadastrados "
-             "casa por qualquer um deles, em qualquer coluna. O nome completo (2+ palavras, "
-             "único na planilha) é usado apenas quando NENHUM telefone bateu, sempre marcado "
-             "com ⚠️ para conferência. Desmarque para um resultado 100% por telefone.",
-    )
-    sales_name_col_match: Optional[str] = sales_name_col if usar_nome_fallback else None
-
     # ── 🤖 IA: sugestão de tags (opcional) ────────────────────────────────────
     def _tag_counts_json(df: Optional[pd.DataFrame], col: Optional[str], top: int = 60) -> dict:
         if df is None or not col or col not in df.columns:
@@ -3291,6 +3278,20 @@ if df_sales_raw is not None and df_kommo_raw is not None:
         if auto_vl == sales_value_col:
             st.caption("✨ Auto-detectado")
         _ai_conferido(_ai_v_res, "valor", sales_value_col)
+
+    # O PROCV é telefone-first: todas as colunas de telefone dos DOIS lados são
+    # varridas (cliente com 3 números casa por qualquer um; dedup por venda).
+    # Nome é último recurso — e aqui o usuário pode desligá-lo de vez.
+    usar_nome_fallback = st.checkbox(
+        "Aceitar match por NOME quando nenhum telefone bater (entra marcado com ⚠️)",
+        value=True,
+        help="O cruzamento bate telefone com telefone: um cliente com 3 números cadastrados "
+             "casa por qualquer um deles, em qualquer coluna. O nome completo (2+ palavras, "
+             "único na planilha) é usado apenas quando NENHUM telefone bateu, sempre marcado "
+             "com ⚠️ para conferência. Desmarque para um resultado 100% por telefone.",
+    )
+    sales_name_col_match: Optional[str] = sales_name_col if usar_nome_fallback else None
+
 
     # ── Configuração de Disparo ────────────────────────────────────────────────
     st.markdown("##### 📣 Disparo")

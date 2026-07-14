@@ -36,3 +36,6 @@ jobs:
 
       - name: Multi-funil (vários Kommo)
         run: python tests/test_multifunil.py
+
+      - name: Smoke da UI (app inteiro com planilhas carregadas)
+        run: python tests/test_ui_smoke.py
