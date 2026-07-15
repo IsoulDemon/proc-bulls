@@ -229,11 +229,75 @@ def test_listas_de_vendas():
        by == {"Ana": 1, "Bia": 1, "Carla": 1}, str(by))
 
 
+def test_grupo_vip():
+    cat("N11. Grupo VIP — venda com telefone na lista, sem janela de data")
+    # A engine é a MESMA do tráfego, só sem tag e sem data.
+    vendas = pd.DataFrame({
+        "Cliente": ["Bolsa De Couro", "Fulano", "Ciclana"],
+        "Telefone": ["+5593991848744", "(11) 3333-2222", "(21) 97777-6666"],
+        "Data": ["05/01/2026", "10/06/2026", "20/06/2026"],  # datas espalhadas
+        "Valor": ["3048,00", "100,00", "80,00"],
+    })
+    # membro VIP com o MESMO número em formato diferente (sem DDI, com traço)
+    vip = pd.DataFrame({"Nome": ["Membro A"], "Telefone": ["93 99184-8744"]})
+    _, _, conv, full = app.run_vip(vendas, "Telefone", vip, "Telefone", sales_name_col="Cliente")
+    ck("Bolsa De Couro casa por telefone (sem depender de data)",
+       len(conv) == 1 and conv.iloc[0]["Criterio_Match"] == "Telefone", f"conv={len(conv)}")
+    ck("valor da venda VIP preservado (3048)",
+       len(conv) == 1 and "3048" in str(conv.iloc[0]["[Venda] Valor"]),
+       str(conv.iloc[0]["[Venda] Valor"]) if len(conv) else "—")
+    ck("colunas do VIP renomeadas (Telefone_VIP/Nome_VIP, sem Tag_Kommo)",
+       "Telefone_VIP" in conv.columns and "Tag_Kommo" not in conv.columns,
+       str([c for c in conv.columns if not c.startswith("[Venda]")]))
+
+    # Dedup: mesma pessoa com 2 números no VIP e nas vendas → 1 conversão
+    vendas2 = pd.DataFrame({"Cliente": ["Ana"], "Fixo": ["(31) 3333-4444"], "Cel": ["(31) 98888-7777"]})
+    vip2 = pd.DataFrame({"Tel": ["3133334444", "31988887777"]})
+    _, _, conv2, _ = app.run_vip(vendas2, "Fixo", vip2, "Tel")
+    ck("dedup por comprador/venda no VIP (2 números → 1)", len(conv2) == 1, f"conv={len(conv2)}")
+
+    # DDD divergente NÃO casa (mesma trava anti-falso-positivo)
+    vendas3 = pd.DataFrame({"Cliente": ["X"], "Tel": ["(11) 98888-7777"]})
+    vip3 = pd.DataFrame({"Tel": ["(21) 98888-7777"]})
+    _, _, conv3, _ = app.run_vip(vendas3, "Tel", vip3, "Tel")
+    ck("DDD divergente não casa no VIP", len(conv3) == 0, f"conv={len(conv3)}")
+
+    # Resgate de telefone escondido na lista VIP (fora da coluna de telefone)
+    vendas4 = pd.DataFrame({"Cliente": ["Ana", "Bia"], "Tel": ["(11) 98888-7777", "(21) 97777-6666"]})
+    vip4 = pd.DataFrame({"Celular": ["", ""], "Obs": ["p:+5511988887777", "sem numero"]})
+    _, _, conv4, _ = app.run_vip(vendas4, "Tel", vip4, "Celular")
+    ck("telefone escondido na lista VIP é resgatado", len(conv4) == 1, f"conv={len(conv4)}")
+
+    # Overlap 3 canais: comprador em Tráfego E VIP
+    vendas5 = pd.DataFrame({"Cliente": ["Ana", "Bia"], "Tel": ["11988887777", "21999990000"]})
+    kommo5 = pd.DataFrame({"Celular": ["11988887777"], "Tags": ["TRAFEGO"]})  # Ana = tráfego
+    vip5 = pd.DataFrame({"Tel": ["11988887777", "21999990000"]})              # Ana E Bia = VIP
+    _, _, traf5, _ = app.run_procv(vendas5, "Tel", kommo5, "Celular", "Tags", "trafego")
+    _, _, vipc5, _ = app.run_vip(vendas5, "Tel", vip5, "Tel")
+    tset = {v for v in traf5["Tel_8dig"] if v}
+    vset = {v for v in vipc5["Tel_8dig"] if v}
+    ck("overlap T∩V = 1 e únicos = 2 (não conta 2×)",
+       len(tset & vset) == 1 and len(tset | vset) == 2,
+       f"T∩V={len(tset & vset)} uniq={len(tset | vset)}")
+
+    # Breakdown por lista com coluna VIP
+    ana = pd.DataFrame({"Cliente": ["A1", "A2"], "Telefone": ["11988880001", "11988880002"]})
+    bia = pd.DataFrame({"Cliente": ["B1"], "Telefone": ["21988880003"]})
+    comb = app.combine_sales_sources([ana, bia], ["Ana.xlsx", "Bia.csv"])
+    tel = app.detect_phone_col(comb)
+    vipb = pd.DataFrame({"Tel": ["21988880003", "11988880002"]})  # B1 e A2 são VIP
+    bd = app.run_breakdown_by_sheet(comb, tel, pd.DataFrame({"Celular": ["11988880001"], "Tags": ["TRAFEGO"]}),
+                                    "Celular", "Tags", "trafego", df_vip=vipb, vip_phone_col="Tel")
+    by_vip = {r["Mês / Aba"]: r["Vendas Grupo VIP"] for _, r in bd.iterrows()} if bd is not None else {}
+    ck("breakdown mostra VIP por vendedora (Ana=1, Bia=1)",
+       by_vip == {"Ana": 1, "Bia": 1}, str(by_vip))
+
+
 # ════════════════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
     for fn in (test_combinar, test_lead_repetido, test_colunas_diferentes, test_tag_em_um_funil,
                test_cenario_completo, test_bordas, test_disparo_e_exclusao, test_performance,
-               test_listas_de_vendas):
+               test_listas_de_vendas, test_grupo_vip):
         try:
             fn()
         except Exception as e:

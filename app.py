@@ -1224,10 +1224,14 @@ def run_procv(
     sales_name_col: Optional[str] = None,
     kommo_name_col: Optional[str] = None,
     traffic_exclude: str = "",
+    all_leads_are_channel: bool = False,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Retorna: (vendas_tratada, kommo_tratada, resultado_trafego, resultado_completo)
     Hierarquia de match: 1) Telefone principal  2) Telefone alternativo  3) Nome completo
+
+    all_leads_are_channel=True: ignora a tag e trata TODO lead como pertencente ao
+    canal (usado pelo Grupo VIP — estar na lista já é a atribuição, não há tag).
     """
     ds = df_sales.copy()
     pos = ds.columns.get_loc(sales_phone_col) + 1
@@ -1285,7 +1289,7 @@ def run_procv(
         k8_primary = _k8_col[i] or ""
         tag_raw = "" if pd.isna(_tag_col[i]) else str(_tag_col[i])
         phone_raw = _phone_col[i]
-        is_traffic = _tag_matches(tag_raw, traffic_keyword, traffic_exclude)
+        is_traffic = True if all_leads_are_channel else _tag_matches(tag_raw, traffic_keyword, traffic_exclude)
 
         # Match por telefone DDD-aware: primeira chave (col principal → alternativas) que casa
         match_reason = ""
@@ -1391,6 +1395,39 @@ def run_procv(
     df_full.attrs.update(_full_attrs)
 
     return ds, dk, df_trafego, df_full
+
+
+def run_vip(
+    df_sales: pd.DataFrame,
+    sales_phone_col: str,
+    df_vip: pd.DataFrame,
+    vip_phone_col: str,
+    sales_name_col: Optional[str] = None,
+    vip_name_col: Optional[str] = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """
+    Cruza a LISTA DO GRUPO VIP contra as vendas. Um membro do grupo "converteu"
+    se o telefone dele bate com uma venda — presença na lista É a atribuição.
+
+    Usa a MESMA engine do tráfego (varredura de todas as colunas de telefone dos
+    dois lados, resgate de números soltos, normalização DDD/9º/DDI, trava de DDD,
+    dedup por comprador e por venda, fallback por nome opcional com ⚠️) — só que
+    SEM filtro de tag e SEM janela de 30 dias (não é questão de data).
+
+    Retorna: (vendas_tratada, vip_tratada, conversoes_vip, resultado_completo).
+    """
+    ds, dvip, df_vip_conv, df_full = run_procv(
+        df_sales, sales_phone_col, df_vip, vip_phone_col,
+        kommo_tag_col="", traffic_keyword="",
+        sales_name_col=sales_name_col, kommo_name_col=vip_name_col,
+        all_leads_are_channel=True,
+    )
+    # Vocabulário VIP: o "lead" é um membro do grupo, não um lead do Kommo
+    ren = {"Telefone_Kommo": "Telefone_VIP", "Nome_Kommo": "Nome_VIP"}
+    for d in (df_vip_conv, df_full):
+        d.rename(columns=ren, inplace=True)
+        d.drop(columns=["Tag_Kommo", "É_Tráfego"], inplace=True, errors="ignore")
+    return ds, dvip, df_vip_conv, df_full
 
 
 # ── Utilitários de data ────────────────────────────────────────────────────────
@@ -1944,6 +1981,9 @@ def run_breakdown_by_sheet(
     kommo_disp_tag_col: Optional[str] = None,
     traffic_exclude: str = "",
     disparo_exclude: str = "",
+    df_vip: Optional[pd.DataFrame] = None,
+    vip_phone_col: Optional[str] = None,
+    vip_name_col: Optional[str] = None,
 ) -> Optional[pd.DataFrame]:
     """
     Cruza UM Kommo contra CADA aba (mês) da planilha de vendas, separadamente.
@@ -1980,6 +2020,12 @@ def run_breakdown_by_sheet(
                 disparo_exclude=disparo_exclude,
             )
             row["Vendas de Disparo"] = int((disp["Venda_Confirmada"] == "SIM").sum()) if len(disp) else 0
+        if df_vip is not None and vip_phone_col:
+            _, _, vipc, _ = run_vip(
+                g, sales_phone_col, df_vip, vip_phone_col,
+                sales_name_col=sales_name_col, vip_name_col=vip_name_col,
+            )
+            row["Vendas Grupo VIP"] = len(vipc)
         rows.append(row)
 
     return pd.DataFrame(rows) if rows else None
@@ -2236,6 +2282,8 @@ def _rename_result_cols(df: pd.DataFrame) -> pd.DataFrame:
         "Tag_Kommo": "Tag no Kommo",
         "Telefone_Kommo": "Telefone (Kommo)",
         "Telefone_Disparo": "Telefone (Disparo)",
+        "Telefone_VIP": "Telefone (VIP)",
+        "Nome_VIP": "Nome (VIP)",
         "Tel_8dig": "Tel. (identificador)",
         "Tel_Limpo_Vendas": "Tel. Limpo (Vendas)",
         "Tel_8dig_Vendas": "Tel. 8 dígitos (Vendas)",
@@ -2323,6 +2371,7 @@ def _write_guide_sheet(ws, summary_data: dict):
         ("📊 Resumo",                "Números principais: conversões, receita, taxas. Comece aqui."),
         ("✅ Vendas — Tráfego",      "Leads que vieram do tráfego pago E fizeram uma compra."),
         ("📣 Vendas — Disparo",      "Leads que receberam disparo E fizeram uma compra dentro de 30 dias."),
+        ("⭐ Vendas — Grupo VIP",    "Vendas feitas por quem está na lista do Grupo VIP (sem janela de data)."),
         ("🔍 Duplicatas",            "Registros duplicados na planilha de vendas (se houver)."),
         ("📋 Todos os Leads",        "Todos os leads do Kommo, com coluna 'Comprou?' para filtrar."),
         ("📦 Vendas (dados brutos)", "Sua planilha de vendas original, processada."),
@@ -2337,7 +2386,7 @@ def _write_guide_sheet(ws, summary_data: dict):
     cols_info = [
         ("Comprou?",             "SIM = lead fez uma compra | NÃO = não encontramos venda para este lead"),
         ("É Lead de Tráfego?",   "SIM = lead tem a tag de tráfego pago no Kommo"),
-        ("Origem da Venda",      "Tráfego / Disparo / Tráfego + Disparo (foi impactado pelos dois)"),
+        ("Origem da Venda",      "Tráfego / Disparo / Grupo VIP — lista todos os canais em que o comprador bate"),
         ("Tel. (8 dígitos)",     "Últimos 8 dígitos do telefone — usados para comparar as listas"),
         ("Dias após o Disparo",  "Quantos dias após o disparo a venda aconteceu (máx. 30 dias conta)"),
         ("Situação do Registro", "Única / Multi-compra / DUPLICATA — análise de repetição nas vendas"),
@@ -2436,6 +2485,7 @@ def build_excel(
     df_dup_analysis: Optional[pd.DataFrame] = None,
     sales_value_col: Optional[str] = None,
     df_breakdown: Optional[pd.DataFrame] = None,
+    df_vip_result: Optional[pd.DataFrame] = None,
 ) -> bytes:
     wb = Workbook()
 
@@ -2457,6 +2507,8 @@ def build_excel(
         d_tot  = len(df_disparo_result)
         guide_summary["Conversões de disparo"] = d_conv
         guide_summary["Taxa de conversão (disparo)"] = f"{d_conv/d_tot*100:.1f}%" if d_tot > 0 else "—"
+    if df_vip_result is not None:
+        guide_summary["Conversões do Grupo VIP"] = len(df_vip_result)
 
     # ── Aba 1: Como Ler (primeira aba — lida antes de tudo) ───────────
     ws_guide = wb.active
@@ -2491,6 +2543,12 @@ def build_excel(
             ("Conversões confirmadas", d_conv),
             ("Taxa de conversão", d_rate),
             ("→ Veja os valores na aba 📣 Vendas — Disparo", ""),
+        ]
+    if df_vip_result is not None:
+        summary_rows += [
+            ("— GRUPO VIP —", ""),
+            ("Conversões do Grupo VIP", len(df_vip_result)),
+            ("→ Veja os valores na aba ⭐ Vendas — Grupo VIP", ""),
         ]
     if df_dup_analysis is not None and "Situacao_Venda" in df_dup_analysis.columns:
         n_dup   = int((df_dup_analysis["Situacao_Venda"].str.startswith("DUPLICATA")).sum())
@@ -2545,6 +2603,22 @@ def build_excel(
         )
         _add_total_row(ws_disp, df_disp_renamed, _vcol)
         all_sheets.append(ws_disp)
+
+    # ── Aba: Vendas — Grupo VIP ───────────────────────────────────────
+    if df_vip_result is not None and len(df_vip_result) > 0:
+        ws_vip = wb.create_sheet("⭐ Vendas — Grupo VIP")
+        df_vip_renamed = _rename_result_cols(df_vip_result)
+        _write_sheet(
+            ws_vip, df_vip_renamed,
+            f"VENDAS DO GRUPO VIP — {len(df_vip_result)} CONVERSÕES CONFIRMADAS",
+            "D4A017",
+        )
+        _add_total_row(ws_vip, df_vip_renamed, _vcol)
+        all_sheets.append(ws_vip)
+    elif df_vip_result is not None:
+        ws_vip = wb.create_sheet("⭐ Vendas — Grupo VIP")
+        ws_vip.cell(1, 1, "Nenhuma venda do Grupo VIP confirmada.").font = Font(italic=True, color="888888")
+        all_sheets.append(ws_vip)
 
     # ── Aba 5: Duplicatas ─────────────────────────────────────────────
     if df_dup_analysis is not None and "Situacao_Venda" in df_dup_analysis.columns:
@@ -2837,7 +2911,9 @@ _CHAT_TOOL = {
         "'vendas' (planilha de vendas tratada), 'kommo' (leads do CRM), "
         "'conversoes_trafego' (vendas atribuídas ao tráfego), "
         "'todos_os_leads_cruzados' (cada lead do Kommo com É_Tráfego e Venda_Confirmada), "
-        "'disparo' (leads de disparo com Venda_Confirmada). "
+        "'disparo' (leads de disparo com Venda_Confirmada), "
+        "'grupo_vip' (a lista de membros do Grupo VIP), "
+        "'conversoes_vip' (vendas feitas por membros do Grupo VIP). "
         "Use 'buscar' para filtrar por nome, telefone (qualquer formato) ou tag."
     ),
     "input_schema": {
@@ -2845,7 +2921,8 @@ _CHAT_TOOL = {
         "properties": {
             "tabela": {"type": "string",
                        "enum": ["vendas", "kommo", "conversoes_trafego",
-                                "todos_os_leads_cruzados", "disparo"]},
+                                "todos_os_leads_cruzados", "disparo",
+                                "grupo_vip", "conversoes_vip"]},
             "buscar": {"type": "string",
                        "description": "Texto ou telefone a procurar em qualquer coluna. "
                                       "Vazio = primeiras linhas da tabela."},
@@ -3194,6 +3271,27 @@ if kommo_disparo_files:
         with st.expander("Prévia"):
             st.dataframe(df_kommo_disparo_raw.head(6), use_container_width=True)
 
+st.markdown("#### ⭐ Lista do Grupo VIP *(opcional)*")
+vip_files = st.file_uploader(
+    "Planilha com os telefones dos membros do grupo VIP (pode soltar mais de um arquivo)",
+    type=["xlsx", "xls", "csv", "xlsm"],
+    key="vip_upload",
+    accept_multiple_files=True,
+    help="Lista à parte com os telefones de quem está no Grupo VIP. "
+         "Se uma venda foi feita com um número que está aqui, ela é atribuída ao "
+         "Grupo VIP — não importa a data (é presença na lista, não janela de tempo). "
+         "Mesma engine de telefone dos outros canais.",
+)
+df_vip_raw: Optional[pd.DataFrame] = None
+if vip_files:
+    df_vip_raw = _load_multi(vip_files)  # concatena/unifica colunas se vier mais de um
+    if df_vip_raw is not None:
+        _nfv = len(vip_files)
+        st.success(f"✅ Grupo VIP: {('%d arquivos · ' % _nfv) if _nfv > 1 else ''}{len(df_vip_raw):,} membros · {len(df_vip_raw.columns)} colunas")
+        _show_treatment_notes(df_vip_raw, "Grupo VIP")
+        with st.expander("Prévia"):
+            st.dataframe(df_vip_raw.head(6), use_container_width=True)
+
 st.divider()
 
 # ── Passo 2: Configuração ──────────────────────────────────────────────────────
@@ -3510,6 +3608,37 @@ if df_sales_raw is not None and df_kommo_raw is not None:
         help="Quando marcado, analisa conversões via disparo mesmo que já existam vendas pelo tráfego.",
     )
 
+    # ── Configuração do Grupo VIP ──────────────────────────────────────────────
+    vip_phone_col: Optional[str] = None
+    vip_name_col: Optional[str] = None
+    if df_vip_raw is not None:
+        st.markdown("##### ⭐ Grupo VIP")
+        auto_vp = detect_phone_col(df_vip_raw)
+        auto_vn = detect_name_col(df_vip_raw)
+        vp1, vp2 = st.columns(2)
+        with vp1:
+            vip_phone_col = st.selectbox(
+                "Coluna de telefone — Lista VIP",
+                list(df_vip_raw.columns),
+                index=_idx(df_vip_raw, auto_vp),
+                key="vip_phone",
+                help="Coluna da lista do Grupo VIP com o telefone dos membros. "
+                     "A ferramenta testa todas as colunas com cara de telefone automaticamente.",
+            )
+            st.caption(_phone_preview(df_vip_raw, vip_phone_col, auto_vp == vip_phone_col))
+        with vp2:
+            vip_name_opts = [none_val] + list(df_vip_raw.columns)
+            vip_name_default = (vip_name_opts.index(auto_vn)
+                                if auto_vn and auto_vn in vip_name_opts else 0)
+            vip_name_sel = st.selectbox(
+                "Coluna de nome — Lista VIP *(fallback, opcional)*",
+                vip_name_opts, index=vip_name_default, key="vip_name",
+                help="Usada só se você ligar o match por nome — quando o telefone não bate.",
+            )
+            vip_name_col = None if vip_name_sel == none_val else vip_name_sel
+        st.caption("⭐ Venda feita com um número que está nesta lista é atribuída ao "
+                   "**Grupo VIP** — independente da data (presença na lista, não janela).")
+
     st.divider()
 
     # ── Passo 3: Processar ─────────────────────────────────────────────────────
@@ -3531,7 +3660,7 @@ if df_sales_raw is not None and df_kommo_raw is not None:
             # Compradores únicos (deduplicado por Tel_8dig no run_procv)
             confirmed = len(df_result)
 
-            progress.progress(60, text="Analisando disparo...")
+            progress.progress(55, text="Analisando disparo...")
             df_disparo_result = None
             if considerar_disparo and disparo_keyword.strip():
                 df_disparo_result = run_disparo(
@@ -3541,6 +3670,15 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                     sales_name_col=sales_name_col_match,
                     kommo_name_col=kommo_name_col,
                     disparo_exclude=disparo_exclude,
+                )
+
+            # ── Grupo VIP: venda com telefone na lista VIP (sem janela de data) ──
+            progress.progress(62, text="Cruzando a lista do Grupo VIP...")
+            df_vip_result = None
+            if df_vip_raw is not None and vip_phone_col:
+                _, _, df_vip_result, _ = run_vip(
+                    df_sales_raw, sales_phone_col, df_vip_raw, vip_phone_col,
+                    sales_name_col=sales_name_col_match, vip_name_col=vip_name_col,
                 )
 
             # ── Breakdown mês a mês (quando a planilha de vendas tem várias abas) ──
@@ -3561,32 +3699,42 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                         kommo_disp_tag_col=kommo_disp_tag_col,
                         traffic_exclude=traffic_exclude,
                         disparo_exclude=disparo_exclude,
+                        df_vip=df_vip_raw,
+                        vip_phone_col=vip_phone_col,
+                        vip_name_col=vip_name_col,
                     )
                 except Exception:
                     df_breakdown = None  # não bloqueia o relatório principal
 
-            # ── Atribuição: sobreposição tráfego × disparo ────────────────────
-            trafego_phones: set = set()
-            if len(df_result) > 0 and "Tel_8dig" in df_result.columns:
-                trafego_phones = {v for v in df_result["Tel_8dig"].dropna() if v}
+            # ── Atribuição: sobreposição entre canais (Tráfego × Disparo × VIP) ──
+            def _phones_of(df, only_sim=False) -> set:
+                if df is None or len(df) == 0 or "Tel_8dig" not in df.columns:
+                    return set()
+                d = df[df["Venda_Confirmada"] == "SIM"] if only_sim else df
+                return {v for v in d["Tel_8dig"].dropna() if v}
 
-            disparo_phones: set = set()
-            if df_disparo_result is not None and len(df_disparo_result) > 0:
-                disp_sim = df_disparo_result[df_disparo_result["Venda_Confirmada"] == "SIM"]
-                if "Tel_8dig" in disp_sim.columns:
-                    disparo_phones = {v for v in disp_sim["Tel_8dig"].dropna() if v}
+            trafego_phones = _phones_of(df_result)
+            disparo_phones = _phones_of(df_disparo_result, only_sim=True)
+            vip_phones     = _phones_of(df_vip_result)
 
-            overlap_phones = trafego_phones & disparo_phones
+            # Coluna "Origem": lista TODOS os canais em que o telefone bate
+            def _origem_for(tel: str) -> str:
+                chans = []
+                if tel in trafego_phones: chans.append("Tráfego")
+                if tel in disparo_phones: chans.append("Disparo")
+                if tel in vip_phones:     chans.append("Grupo VIP")
+                return " + ".join(chans) if chans else "—"
 
-            # Adiciona coluna "Origem" em cada resultado
-            if len(df_result) > 0:
-                df_result["Origem"] = df_result["Tel_8dig"].apply(
-                    lambda t: "Tráfego + Disparo" if t in overlap_phones else "Tráfego"
-                )
-            if df_disparo_result is not None and len(df_disparo_result) > 0:
-                df_disparo_result["Origem"] = df_disparo_result["Tel_8dig"].apply(
-                    lambda t: "Tráfego + Disparo" if t in overlap_phones else "Disparo"
-                )
+            for _df_ch in (df_result, df_disparo_result, df_vip_result):
+                if _df_ch is not None and len(_df_ch) > 0 and "Tel_8dig" in _df_ch.columns:
+                    _df_ch["Origem"] = _df_ch["Tel_8dig"].apply(_origem_for)
+
+            # Sobreposições (compradores em 2+ canais) — para não contar 2×
+            overlap_td = trafego_phones & disparo_phones      # compat com o resumo antigo
+            overlap_tv = trafego_phones & vip_phones
+            overlap_dv = disparo_phones & vip_phones
+            overlap_phones = overlap_td | overlap_tv | overlap_dv
+            all_conv_phones = trafego_phones | disparo_phones | vip_phones
 
             disp_sim_df = None
             if df_disparo_result is not None and len(df_disparo_result) > 0:
@@ -3606,7 +3754,8 @@ if df_sales_raw is not None and df_kommo_raw is not None:
 
             progress.progress(90, text="Gerando relatório Excel...")
             excel_bytes = build_excel(ds_t, dk_t, df_result, df_full, df_disparo_result, df_dup_analysis,
-                                       sales_value_col=sales_value_col, df_breakdown=df_breakdown)
+                                       sales_value_col=sales_value_col, df_breakdown=df_breakdown,
+                                       df_vip_result=df_vip_result)
             st.session_state["excel_bytes"] = excel_bytes
 
             progress.progress(100, text="Concluído!")
@@ -3620,7 +3769,9 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                 disp_total = len(df_disparo_result)
 
             n_overlap    = len(overlap_phones)
-            n_total_uniq = len(trafego_phones | disparo_phones)
+            n_total_uniq = len(all_conv_phones)
+            vip_total    = len(df_vip_raw) if df_vip_raw is not None else 0
+            vip_conv     = len(df_vip_result) if df_vip_result is not None else 0
 
             # Qualidade dos dados de vendas — telefone em QUALQUER coluna conta
             # (cliente com fixo vazio mas celular preenchido TEM telefone)
@@ -3760,13 +3911,35 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                         f"ou os telefones não bateram."
                     )
 
-            # ── Sobreposição ────────────────────────────────────────────────────
+            # ── Grupo VIP ───────────────────────────────────────────────────────
+            if df_vip_result is not None:
+                st.divider()
+                st.markdown('<div class="step-wrap"><div class="step-num">⭐</div><div class="step-text">Grupo VIP</div></div>', unsafe_allow_html=True)
+                if vip_conv > 0:
+                    taxa_v = f"{vip_conv/vip_total*100:.1f}%" if vip_total > 0 else "—"
+                    st.success(f"**{vip_conv} vendas** feitas por membros do Grupo VIP — "
+                               f"{taxa_v} dos {vip_total:,} telefones na lista (sem janela de data).")
+                    st.caption("Veja a lista completa na aba **⭐ Vendas — Grupo VIP** do Excel.")
+                    with st.expander(f"Prévia — {vip_conv} vendas do Grupo VIP"):
+                        st.dataframe(df_vip_result, use_container_width=True, height=260)
+                else:
+                    st.warning(
+                        f"**{vip_total:,} membros** na lista VIP, mas nenhum bateu com uma venda. "
+                        f"Confira se a coluna de telefone da lista VIP está correta."
+                    )
+
+            # ── Sobreposição entre canais ───────────────────────────────────────
             if n_overlap > 0:
                 st.divider()
+                _partes = []
+                if overlap_td: _partes.append(f"{len(overlap_td)} em Tráfego+Disparo")
+                if overlap_tv: _partes.append(f"{len(overlap_tv)} em Tráfego+VIP")
+                if overlap_dv: _partes.append(f"{len(overlap_dv)} em Disparo+VIP")
                 st.info(
-                    f"🔀 **{n_overlap} comprador(es)** aparecem em tráfego **e** disparo. "
-                    f"Total único de compradores: **{n_total_uniq}**. "
-                    f"Detalhes na coluna **'Origem da Venda'** do Excel."
+                    f"🔀 **{n_overlap} comprador(es)** caem em mais de um canal "
+                    f"({', '.join(_partes)}). Total único de compradores nos canais: "
+                    f"**{n_total_uniq}** — some os canais e desconte essa sobreposição para "
+                    f"não contar a mesma venda 2×. Detalhes na coluna **'Origem da Venda'** do Excel."
                 )
 
             # ── 🤖 Contexto do resultado (alimenta a análise E o chat) ─────────
@@ -3805,7 +3978,17 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                             "leads_de_disparo": int(disp_total),
                             "conversoes_na_janela_30d": int(disp_conv),
                             "datas_dos_disparos_extraidas_das_tags": _datas_disp},
-                "sobreposicao_trafego_e_disparo": int(n_overlap),
+                "grupo_vip": ({"analisado": True, "leads_vip": int(vip_total),
+                               "conversoes_vip": int(vip_conv),
+                               "regra": "venda com telefone na lista VIP conta, sem janela de data"}
+                              if df_vip_result is not None else {"analisado": False}),
+                "sobreposicao_entre_canais": {
+                    "trafego_e_disparo": len(overlap_td),
+                    "trafego_e_vip": len(overlap_tv),
+                    "disparo_e_vip": len(overlap_dv),
+                    "compradores_em_2_ou_mais_canais": int(n_overlap),
+                    "total_unico_de_compradores": int(n_total_uniq),
+                },
             }
             _payload_resumo = json.dumps(_resumo_dict, ensure_ascii=False, default=str)
 
@@ -3813,8 +3996,9 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                 """Tabela compacta das conversões para o chat 🤖."""
                 if df is None or len(df) == 0:
                     return []
-                cols = [c for c in ("Origem", "Tag_Kommo", "Nome_Kommo", "Tel_8dig",
-                                    "Criterio_Match", "Data_Venda", "Dias_Após_Disparo")
+                cols = [c for c in ("Origem", "Tag_Kommo", "Nome_Kommo", "Nome_VIP",
+                                    "Telefone_VIP", "Tel_8dig", "Criterio_Match",
+                                    "Data_Venda", "Dias_Após_Disparo")
                         if c in df.columns]
                 for _c in (sales_name_col, sales_value_col, sales_date_col):
                     if _c and f"[Venda] {_c}" in df.columns:
@@ -3847,6 +4031,17 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                 _sem_tel_amostra = (df_sales_raw.loc[phones_series == "", sales_name_col]
                                     .dropna().astype(str).head(10).tolist())
 
+            # Membros VIP que NÃO compraram (telefone na lista sem venda casada)
+            _vip_nao_conv_amostra = []
+            if df_vip_raw is not None and vip_phone_col:
+                _vip_conv_tels = set(df_vip_result["Tel_8dig"]) if df_vip_result is not None else set()
+                for _v in df_vip_raw[vip_phone_col].dropna().astype(str).head(400):
+                    _tk = phone_group_key(_v)
+                    if _tk and _tk not in _vip_conv_tels:
+                        _vip_nao_conv_amostra.append(_mask_pii(_v))
+                    if len(_vip_nao_conv_amostra) >= 15:
+                        break
+
             st.session_state["_ai_ctx"] = json.dumps({
                 "resumo": _resumo_dict,
                 "tratamento_aplicado_nas_planilhas": {
@@ -3875,13 +4070,18 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                     "quando os dois lados têm DDD; fallback por nome é OPCIONAL (desligado "
                     "por padrão), exige 2+ palavras com ao menos uma distintiva ('Maria José' "
                     "sozinho não casa) e entra marcado com ⚠️; deduplica por comprador "
-                    "(telefone) e por venda; disparo: vale a venda de 0 a 30 dias após a "
-                    "data do disparo (extraída da tag ou da coluna)."),
+                    "(telefone) e por venda. CANAIS: tráfego = lead com tag de tráfego que "
+                    "comprou; disparo = venda de 0 a 30 dias após a data do disparo (tag ou "
+                    "coluna); Grupo VIP = venda feita com telefone presente na lista VIP, SEM "
+                    "janela de data (é presença na lista). A mesma venda pode cair em mais de "
+                    "um canal — a coluna Origem lista todos, e a sobreposição evita contar 2×."),
                 "conversoes_de_trafego": _tbl_chat(df_result),
                 "conversoes_de_disparo": _tbl_chat(disp_sim_df),
+                "conversoes_de_vip": _tbl_chat(df_vip_result),
                 "resultado_por_lista_ou_mes": (df_breakdown.astype(str).to_dict("records")
                                               if (df_breakdown is not None and len(df_breakdown) > 0) else []),
                 "leads_de_trafego_que_NAO_converteram_amostra": _nao_conv_amostra,
+                "membros_vip_que_NAO_converteram_amostra": _vip_nao_conv_amostra,
                 "vendas_sem_telefone_amostra": _sem_tel_amostra,
             }, ensure_ascii=False, default=str)
             # Tabelas REAIS ficam na sessão — o chat consulta linha a linha via tool
@@ -3891,6 +4091,8 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                 "conversoes_trafego": df_result,
                 "todos_os_leads_cruzados": df_full,
                 "disparo": df_disparo_result,
+                "grupo_vip": df_vip_raw,
+                "conversoes_vip": df_vip_result,
             }
             st.session_state.pop("_ai_chat", None)  # novo processamento → conversa nova
 
@@ -3903,12 +4105,14 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                 st.divider()
                 st.markdown('<div class="step-wrap"><div class="step-num">🤖</div><div class="step-text">Análise do Claude</div></div>', unsafe_allow_html=True)
 
-                # 1) Revisão dos matches ⚠️ por nome (tráfego + disparo, até 30)
+                # 1) Revisão dos matches ⚠️ por nome (tráfego + disparo + VIP, até 30)
                 _pares = []
                 if sales_name_col:
                     _fontes = [("tráfego", df_result)]
                     if disp_sim_df is not None:
                         _fontes.append(("disparo", disp_sim_df))
+                    if df_vip_result is not None and len(df_vip_result) > 0:
+                        _fontes.append(("Grupo VIP", df_vip_result))
                     for _origem, _df_f in _fontes:
                         if _df_f is None or len(_df_f) == 0:
                             continue
@@ -3917,7 +4121,7 @@ if df_sales_raw is not None and df_kommo_raw is not None:
                                 continue
                             _pares.append({
                                 "indice": len(_pares),
-                                "nome_no_kommo": str(_r.get("Nome_Kommo", "")),
+                                "nome_no_kommo": str(_r.get("Nome_Kommo", _r.get("Nome_VIP", ""))),
                                 "nome_na_venda": str(_r.get(f"[Venda] {sales_name_col}", "")),
                                 "origem": _origem,
                             })

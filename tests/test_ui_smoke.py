@@ -61,9 +61,17 @@ def _mk_kommo() -> FakeUpload:
     return FakeUpload(csv.encode("utf-8"), "kommo.csv")
 
 
+def _mk_vip() -> FakeUpload:
+    # lista do Grupo VIP: um telefone que casa com uma venda (Ana Lima)
+    csv = "Nome,Telefone\nAna L,(31) 98888-7777\nZeca,(31) 90000-1111\n"
+    return FakeUpload(csv.encode("utf-8"), "grupo_vip.csv")
+
+
 def _fake_uploader(label, *a, **kw):
     if kw.get("key") == "sales_upload":
         return [_mk_vendas(), _mk_vendas2()]  # 2 listas → combine_sales_sources
+    if kw.get("key") == "vip_upload":
+        return [_mk_vip()]  # exercita o canal Grupo VIP no app inteiro
     if kw.get("accept_multiple_files"):
         return [_mk_kommo()] if kw.get("key") == "kommo_upload" else []
     return _mk_vendas()
